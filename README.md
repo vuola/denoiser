@@ -8,7 +8,7 @@ completed.
 
 | Chapter | Content | Status |
 |---|---|---|
-| 1 | Project plan | Draft, waiting for review |
+| 1 | Project plan | Reviewed; question 3 of section 1.8 waiting for approval |
 
 ---
 
@@ -75,11 +75,19 @@ denoiser/
   include/         public headers (function interface documentation lives here)
   src/             implementation and command-line program
   tests/           unit tests, regression tests, cross-platform comparison tool
-  run/             benchmark scripts and their results, test volumes, figures
+  tests/data/      64³ crops of the CT volumes (tracked) and the script that cuts them
+  run/             benchmark scripts and their results, figures
   latex/           phase reports (.tex) and their figures
   third_party/     vendored dependencies (test framework, header-only readers)
-  ORIGINAL_CODE/   untouched reference material
+  data/            full CT volumes, 250³ (local only; data/README.txt is tracked)
+  ORIGINAL_CODE/   untouched reference material (local only, not in git)
 ```
+
+Test data: four real CT volumes (samples A–D, 250×250×250, 32-bit big-endian
+float, values 0–255, 62.5 MB each) live in `data/` and are ignored by git.
+`python tests/data/make_crops.py` cuts the centred 64×64×64 cube of each into
+`tests/data/` (1 MB each, tracked), so tests run from a fresh clone. Details
+are in `data/README.txt`.
 
 `include/` is not in the list of required folders but the NMSC project has it;
 it is proposed here because phase 2 puts the interface documentation in
@@ -90,15 +98,18 @@ headers.
 | Topic | Choice | Reason |
 |---|---|---|
 | Build | GNU make, one `makefile` at the root | Preferred; works on this Windows machine (MinGW g++ 16, make 4.4) and on Linux |
-| CMake | Only added if a GPU toolchain needs it later | A CPU-only C++ program does not need it |
+| CMake | Not used for now | CPU code does not need it. CUDA on Linux builds with make and `nvcc`. CMake is added only if a CUDA build on Windows is wanted, where `nvcc` needs the Microsoft compiler instead of MinGW |
+| GPU target | NVIDIA/CUDA (later, outside this plan) | Decided in review |
+| Reports | LaTeX built with MiKTeX on Windows | Small basic install that fetches missing packages on demand |
 | Language | C++17 | Supported by current CPU and GPU compilers |
 | Threads | OpenMP | Same as the NMSC project; simpler than hand-made thread pools |
 | Unit tests | doctest (single header in `third_party/`) | No installation, runs with `make test` |
 | Code comments | Doxygen-style blocks on every function | Phase 2 requirement; can generate a reference manual |
 | Floating point | No `-ffast-math`; fixed summation order in the reference path | Needed for comparing results across platforms |
 
-`.gitignore` currently ignores `Makefile`; that line will be removed so the
-build file is tracked.
+The new code derives from Samuel Väisänen's C++ and, through it, from the
+GPL-3 ImageJ plugin of Behnel and Wagner. The repository therefore stays GPL-3
+and the source files credit both.
 
 ### 1.5 Workflow
 
@@ -160,26 +171,42 @@ justified.
 
 | Risk | Handling |
 |---|---|
-| No real CT data in the repository | Synthetic phantom first; real data added when available |
+| Real CT data has no noise-free ground truth | Synthetic phantom with known noise for quality figures; real crops for regression and benchmarks |
+| `ORIGINAL_CODE` is not in git, so the reference program cannot be rebuilt from a fresh clone | Reference outputs for the tracked crops are stored in `tests/data/` in step 0.4 |
 | Optimisation changes results unnoticed | Baseline outputs from step 0.4 checked in every step |
 | Float results differ between compilers and platforms | Tolerances defined in step 2.4, no unsafe math flags |
 | Readable reference becomes too slow for full volumes | Phase 1 optimised path kept as a second backend |
-| No LaTeX installed on this machine | See open questions |
 
-### 1.8 Open questions for review
+### 1.8 Decisions from the plan review
 
-1. **CT data format.** In which format and sample type do your CT volumes
-   arrive (raw + `.vgi`, MetaImage `.mhd`, TIFF stack, NRRD, DICOM, other), and
-   how large are they?
-2. **Real test data.** Can a small real CT sub-volume be placed in `run/`, or
-   should the project use only synthetic volumes?
-3. **Paper deviations.** Should the default stay identical to the original code,
-   or follow the IPOL normalisation once both are available (step 1.5)?
-4. **Target platforms.** Which machines must be supported besides this Windows
-   PC (Linux workstation, cluster), and which GPU family is expected later
-   (NVIDIA/CUDA, or vendor-neutral)? This decides whether CMake is needed.
-5. **LaTeX.** `pdflatex` is not installed here. Will you install a TeX
-   distribution, or build the PDFs elsewhere from the `.tex` files?
-6. **Licence and attribution.** The repository is GPL-3, like the ImageJ plugin
-   the C++ derives from. Is Samuel Väisänen's agreement to publish his code in
-   this repository in place?
+| # | Question | Decision |
+|---|---|---|
+| 1 | CT data format | Headerless raw, 32-bit big-endian float, as in `data/`. Step 1.1 still adds the general description (sample type, byte order, header offset); other file formats in step 1.2 wait until a need appears |
+| 2 | Real test data | Samples A–D in `data/`, 64³ crops in `tests/data/` |
+| 3 | Default filter behaviour | Proposed: keep the original behaviour as default, see below. Waiting for approval |
+| 4 | GPU family | NVIDIA/CUDA |
+| 5 | LaTeX | MiKTeX on this Windows PC |
+| 6 | Original code and emails | Removed from the remote repository; `ORIGINAL_CODE` is local only |
+
+**Recommendation for question 3.** Keep the behaviour of the original code
+(which is also the behaviour of the ImageJ plugin) as the default through
+phases 0–2, and add the IPOL patch-size normalisation and exponential kernel as
+options in step 1.5. Reasons:
+
+- The regression baseline of step 0.4 only works if the default reproduces the
+  original output.
+- Sigma values and results you already have for these samples were obtained
+  with this behaviour, as were those of other users of the ImageJ plugin.
+- The IPOL variant is not known to be better here: its parameters were tuned
+  for 2D photographs, not for 3D CT patches.
+
+Step 1.5 then compares both variants on the phantom (PSNR against the known
+noise-free volume) and on the real crops. The default changes only if that
+comparison shows a clear gain, and you decide on the basis of those numbers.
+
+### 1.9 Open questions
+
+1. Which noise sigma did you use for samples A–D? It is needed for the baseline
+   in step 0.4.
+2. Does the Ubuntu server have an NVIDIA GPU? If so it becomes the second test
+   platform for the cross-platform comparison of step 2.4.

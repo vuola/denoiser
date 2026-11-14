@@ -1,0 +1,9 @@
+# Text files are stored and checked out with LF line endings on every platform,
+# so that Windows and Linux work on identical files.
+* text=auto eol=lf
+
+# Voxel data and documents are never converted.
+*.vol binary
+*.raw binary
+*.pdf binary
+*.png binary

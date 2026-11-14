@@ -10,6 +10,7 @@ completed.
 |---|---|---|
 | 1 | Project plan | Reviewed; question 3 of section 1.8 waiting for approval |
 | 2 | Existing toolkit and the pipeline for new scans | Draft, waiting for review |
+| 3 | Step 0.1: folder layout, build and tests | Done, waiting for review |
 
 ---
 
@@ -353,3 +354,91 @@ Consequences:
   the defaults may not suit 1 µm data. Step 1.5 makes the radii settable, the
   run record stores the voxel size, and the defaults are reviewed when the
   first 1 µm scan arrives.
+
+---
+
+## 3. Step 0.1 — Folder layout, build and tests
+
+Status: done, waiting for review. Nothing of this step is committed yet.
+
+### 3.1 What was added
+
+| Path | Content |
+|---|---|
+| `makefile` | Build, test, clean and remote-test targets |
+| `.gitattributes` | Text files use LF line endings on every platform; `.vol`, `.raw`, `.pdf`, `.png` are never converted |
+| `include/version.hpp`, `src/version.cpp` | The first library function, `denoiser::version()` |
+| `src/main.cpp` | The command-line program. It recognises `info`, `noise`, `run`, `--version` and `--help`; the three commands only report that they are not implemented yet |
+| `tests/test_main.cpp` | Test runner (doctest supplies `main`) |
+| `tests/test_setup.cpp` | Two tests of the setup: the version text is well formed, and the two tracked test scans are present with the right size |
+| `third_party/doctest/` | doctest 2.4.12, one header, with its MIT licence text |
+| `run/`, `latex/` | Empty for now (a `.gitkeep` file keeps them in git) |
+
+### 3.2 Commands
+
+Run from the repository root.
+
+| Command | Effect |
+|---|---|
+| `make` | Builds the program `build/denoiser` |
+| `make test` | Builds and runs the unit tests (`build/run_tests`) |
+| `make clean` | Removes `build/` and `build-san/` |
+| `make test SANITIZE=1` | Builds into `build-san/` with address and undefined-behaviour checks, then runs the tests. Linux only |
+| `make remote-test` | Sends the last commit to the second machine and runs the tests there (section 3.4) |
+| `make help` | Lists the targets |
+
+### 3.3 Build choices
+
+- **Output goes to `build/`.** Object files and programs stay out of the source
+  folders, and `build/` is already ignored by git.
+- **Flags: `-O2 -std=c++17 -Wall -Wextra`, with OpenMP.** There is no
+  `-march=native` and no `-ffast-math`, so that two machines compile the same
+  arithmetic (section 1.4). Whether `-march=native` is worth adding for speed
+  is measured in step 1.7.
+- **Header dependencies are tracked automatically.** Changing a header
+  rebuilds exactly the files that include it.
+- **New source files need no makefile change.** Every `src/*.cpp` except
+  `main.cpp` is library code and is linked into both the program and the
+  tests; every `tests/*.cpp` is part of the test program.
+- **On Windows the compiler's runtime is linked into the program (`-static`).**
+  Without it the test program did not start from Git Bash: Git for Windows
+  ships an older `libstdc++` DLL that was found before the compiler's own.
+- **On Windows `make` needs the Unix tools of Git for Windows on the PATH.** It
+  was tested from Git Bash and from PowerShell.
+
+### 3.4 The second machine
+
+A Linux machine with an NVIDIA GPU is the second platform (section 1.9). The
+repository refers to it only by the SSH host alias `gpu`; the alias is defined
+in `~/.ssh/config` on the development machine, outside the repository.
+
+One-time setup:
+
+1. Add a `Host gpu` entry with the machine's address and user name to
+   `~/.ssh/config`. Key login must work without a prompt.
+2. Clone the repository on that machine into `~/denoiser`.
+3. On the development machine: `git remote add gpu gpu:denoiser`.
+
+After that, `make remote-test` pushes the last commit to the branch
+`remote-test` of that clone, checks it out there and runs `make test`.
+Uncommitted changes are not sent, and nothing goes to GitHub. Another alias or
+folder can be given as `make remote-test REMOTE=name REMOTE_DIR=folder`.
+
+### 3.5 Results
+
+| Platform | Compiler | `make` | `make test` | `make test SANITIZE=1` |
+|---|---|---|---|---|
+| Windows 11, development machine | MinGW g++ 16.2 | builds | 2 test cases, 12 checks, all pass | not available |
+| Linux, second machine | g++ 15.2 | builds | 2 test cases, 12 checks, all pass | all pass, no sanitizer report |
+
+Both builds are free of compiler warnings. The Linux run used a temporary
+commit holding the uncommitted work of this step; `make remote-test` itself
+runs for the first time once the step is committed.
+
+### 3.6 Open points
+
+- LaTeX is not installed on either machine yet. It is needed for step 1.9 at
+  the earliest.
+- The section 1.5 rule "a branch per main phase" has not been applied: all
+  commits so far are on `main`. Proposal: keep working on `main`, since there
+  is one developer and each step is reviewed before it is committed.

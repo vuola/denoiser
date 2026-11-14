@@ -2,6 +2,8 @@
 #
 #   make               build the program            -> build/denoiser
 #   make test          build and run the unit tests -> build/run_tests
+#   make reference     build the original, unchanged filter -> build/denoiser_reference
+#                      and its one-worker variant          -> build/denoiser_reference_1w
 #   make clean         remove all build output
 #   make remote-test   run the tests of the last commit on the remote machine
 #   make help          list the targets
@@ -54,7 +56,7 @@ TEST_OBJ := $(TEST_SRC:%.cpp=$(BUILD)/%.o)
 PROGRAM  := $(BUILD)/denoiser$(EXE)
 TESTS    := $(BUILD)/run_tests$(EXE)
 
-.PHONY: all test clean remote-test help
+.PHONY: all test reference clean remote-test help
 
 all: $(PROGRAM)
 
@@ -76,6 +78,38 @@ $(BUILD)/%.o: %.cpp
 
 -include $(LIB_OBJ:.o=.d) $(MAIN_OBJ:.o=.d) $(TEST_OBJ:.o=.d)
 
+# The original filter, compiled without any change to its source. It needs
+# C++20 and uses std::thread. The source is local reference material that is
+# not in git (README section 1.3); the target fails if the file is absent.
+#
+# Two programs are built from the same source:
+#   denoiser_reference     as the author built it: (processors - 1) workers;
+#                          the result differs slightly from run to run
+#   denoiser_reference_1w  one worker (tests/reference/one_worker.cpp replaces
+#                          the processor count); the result is repeatable
+REFERENCE_SRC := ORIGINAL_CODE/denoiserVersionA.cpp
+REFERENCE     := $(BUILD)/denoiser_reference$(EXE)
+REFERENCE_1W  := $(BUILD)/denoiser_reference_1w$(EXE)
+REFERENCE_CXX := $(CXX) -O2 -std=c++20
+
+# With the static runtime on Windows the linker must be told that the
+# replacement of the processor count is intended.
+ifeq ($(OS),Windows_NT)
+  ONE_WORKER_LDFLAGS := -Wl,--allow-multiple-definition
+else
+  ONE_WORKER_LDFLAGS :=
+endif
+
+reference: $(REFERENCE) $(REFERENCE_1W)
+
+$(REFERENCE): $(REFERENCE_SRC)
+	@mkdir -p $(BUILD)
+	$(REFERENCE_CXX) $^ $(LDFLAGS) -pthread -o $@
+
+$(REFERENCE_1W): $(REFERENCE_SRC) tests/reference/one_worker.cpp
+	@mkdir -p $(BUILD)
+	$(REFERENCE_CXX) $^ $(LDFLAGS) $(ONE_WORKER_LDFLAGS) -pthread -o $@
+
 clean:
 	rm -rf build build-san
 
@@ -87,4 +121,4 @@ remote-test:
 	ssh $(REMOTE) "cd $(REMOTE_DIR) && git checkout --quiet --force --detach remote-test && make test"
 
 help:
-	@sed -n '2,12p' makefile
+	@sed -n '2,14p' makefile

@@ -10,7 +10,8 @@ completed.
 |---|---|---|
 | 1 | Project plan | Reviewed; question 3 of section 1.8 waiting for approval |
 | 2 | Existing toolkit and the pipeline for new scans | Draft, waiting for review |
-| 3 | Step 0.1: folder layout, build and tests | Done, waiting for review |
+| 3 | Step 0.1: folder layout, build and tests | Done, committed |
+| 4 | Step 0.2: the original filter as reference program | Done, committed |
 
 ---
 
@@ -77,6 +78,7 @@ denoiser/
   include/         public headers (function interface documentation lives here)
   src/             implementation and command-line program
   tests/           unit tests, regression tests, cross-platform comparison tool
+  tests/reference/ scripts that run the original filter and compare volumes
   tests/data/      64³ test scans cut from the CT scans (tracked) and the script that cuts them
   run/             benchmark scripts and their results, figures
   latex/           phase reports (.tex) and their figures
@@ -359,7 +361,7 @@ Consequences:
 
 ## 3. Step 0.1 — Folder layout, build and tests
 
-Status: done, waiting for review. Nothing of this step is committed yet.
+Status: done and committed.
 
 ### 3.1 What was added
 
@@ -431,9 +433,8 @@ folder can be given as `make remote-test REMOTE=name REMOTE_DIR=folder`.
 | Windows 11, development machine | MinGW g++ 16.2 | builds | 2 test cases, 12 checks, all pass | not available |
 | Linux, second machine | g++ 15.2 | builds | 2 test cases, 12 checks, all pass | all pass, no sanitizer report |
 
-Both builds are free of compiler warnings. The Linux run used a temporary
-commit holding the uncommitted work of this step; `make remote-test` itself
-runs for the first time once the step is committed.
+Both builds are free of compiler warnings. After the step was committed,
+`make remote-test` ran with the same result on the second machine.
 
 ### 3.6 Open points
 
@@ -442,3 +443,150 @@ runs for the first time once the step is committed.
 - The section 1.5 rule "a branch per main phase" has not been applied: all
   commits so far are on `main`. Proposal: keep working on `main`, since there
   is one developer and each step is reviewed before it is committed.
+
+---
+
+## 4. Step 0.2 — The original filter as reference program
+
+Status: done and committed.
+
+### 4.1 What was added
+
+| Path | Content |
+|---|---|
+| `makefile`, target `reference` | Compiles `ORIGINAL_CODE/denoiserVersionA.cpp` without any change into two programs (section 4.3) |
+| `tests/reference/run_reference.py` | Runs a reference program on a scan folder (`.vgi` + `.vol`) and writes the result as `.vol` + `.vgi` |
+| `tests/reference/compare_volumes.py` | Compares two volumes voxel by voxel: number of differing voxels, largest and RMS difference |
+| `tests/reference/slice_images.py` | Writes PNG images of slices for visual inspection: input, filtered, difference (section 4.7) |
+| `tests/reference/one_worker.cpp` | A few lines that make the original source start one worker thread instead of many |
+
+The original source stays outside git. To build the reference on another
+machine, copy that one file into `ORIGINAL_CODE/` of the clone there.
+
+### 4.2 Commands
+
+```
+make reference
+python tests/reference/run_reference.py tests/data/Sample2_5mu_c64 --sigma 10 --one-worker
+python tests/reference/compare_volumes.py a.vol b.vol
+python tests/reference/slice_images.py tests/data/Sample2_5mu_c64 build/reference/Sample2_5mu_c64_ref_s10.vol
+```
+
+The Python command is `python` on Windows and `python3` on Linux. On Windows
+`python3` is only a placeholder that reports that Python is missing.
+
+`run_reference.py` does what section 2.6 announced: it converts the scan to a
+temporary float file (value = count × 255 / 65535), runs the original program
+on it, converts the result back to 16-bit and deletes the temporary files.
+`--sigma` is on the 0–255 scale. Results go to `build/reference/` unless
+`--out` names another folder; `--keep-float` also keeps the unrounded result
+as a `.f32` file for exact comparisons. The script holds the volume in memory
+and is meant for the test scans only.
+
+### 4.3 Finding: the original program is not repeatable
+
+The original source compiles unchanged and without warnings with both
+compilers (as C++20, which it needs). Two runs of it on the same input do not
+give the same output:
+
+| Comparison (Sample2 test scan, sigma 10) | Voxels differing | Largest difference |
+|---|---|---|
+| Original, run 1 against run 2, float result | 86 % | 0.0002 on the 0–255 scale |
+| Original, run 1 against run 2, 16-bit result | 0.5 % | 1 count |
+
+The cause is in the threading. The program starts one worker per processor
+(minus one). The workers take search shifts from a shared counter, so which
+worker handles which shift depends on timing, and each worker keeps its own
+partial sums. The partial sums are added at the end, and floating-point
+addition gives slightly different results for different groupings.
+
+A program whose output changes between runs cannot serve as a regression
+reference. The target `make reference` therefore builds two programs from the
+same unchanged source:
+
+| Program | Workers | Use |
+|---|---|---|
+| `build/denoiser_reference` | processors − 1, as the author built it | Run time of the original |
+| `build/denoiser_reference_1w` | 1 | Repeatable reference for comparing results |
+
+The one-worker program is made by linking `tests/reference/one_worker.cpp`,
+which replaces the standard library's processor count with 1. The filter
+source itself is not touched.
+
+### 4.4 Results
+
+All runs: 64³ test scans, sigma 10 (patch radius 1, search radius 10).
+
+| Check | Result |
+|---|---|
+| One-worker program, run 1 against run 2, both machines, both scans | Identical, bit for bit |
+| One-worker program, Windows/MinGW g++ 16.2 against Linux/g++ 15.2, both scans | Identical, bit for bit |
+| One-worker against multi-worker program, float result | Largest difference 0.0055 on the 0–255 scale |
+| One-worker against multi-worker program, 16-bit result | 5.8 % of voxels differ, by at most 2 counts |
+| Result values outside 0–65535 after conversion, NaN or infinite values | None |
+
+Run time of the original program on one 64³ test scan:
+
+| Machine | Multi-worker | One worker |
+|---|---|---|
+| Development machine (11 workers) | 12–13 s | 38–51 s |
+| Second machine (15 workers) | 7.6 s | 27–29 s |
+
+The times are single runs, noted only to show that the reference is usable;
+step 0.4 measures properly.
+
+### 4.5 What this means for later steps
+
+- **The one-worker program is the regression reference.** Its output is the
+  same on every run and on both platforms, so later code can be required to
+  match it exactly where the arithmetic is unchanged.
+- **The 0.0055 difference is a first measurement for step 1.6.** One worker
+  adds 9260 terms per voxel in one long chain; several workers add shorter
+  chains. The gap between the two is rounding error of 32-bit sums, and it
+  exceeds one 16-bit count (0.004). It is small against the noise (sigma about
+  10), but it shows that the summation order must be fixed by design in the
+  new code, not left to thread timing.
+- **Many workers give little speed-up.** Fifteen workers are only 3.7 times
+  faster than one. Likely causes are the items already listed in section 1.2
+  (threads created per block, 200 MB of result storage per worker); step 1.7
+  looks into it.
+
+### 4.6 Open points
+
+- The sigma of 10 used here is a placeholder. A rough neighbour-difference
+  estimate on the two test scans gives 12 and 14 on the 0–255 scale; the
+  proper estimate is step 1.4. Step 0.4 will take the baseline at several
+  sigma values so that all rows of the parameter table that matter are
+  covered.
+- The `.vgi` writer shared with `make_crops.py` handles cubes only. That is
+  enough for the test scans; the real writer is step 1.2.
+
+### 4.7 Visual inspection
+
+`tests/reference/slice_images.py` replaces looking at results in ImageJ. It
+takes the input volume and the filtered volume (each a scan folder or a `.vol`
+file with its `.vgi`) and writes one PNG per axis into `build/slices/`. Each
+image shows the same slice three times, left to right:
+
+| Panel | Content |
+|---|---|
+| Input | The slice before filtering |
+| Filtered | The slice after filtering, on the same grey scale |
+| Difference | Filtered minus input; mid-grey is "no change" |
+
+A difference panel that looks like pure noise means the filter removed only
+noise. Outlines of fibres in it mean the filter also changed the structure.
+
+Options: `--axis x|y|z|all` (default all), `--slice N` (default the middle
+slice), `--window LOW HIGH` in counts (default the 0.5 and 99.5 percentiles of
+the input slice), `--gain` for the difference panel (default 1), `--out`.
+The script reads only the requested slices; one slice of a full
+1142×1142×1000 scan takes about 4 seconds. It needs only the Python standard
+library.
+
+First look at the reference result (Sample2 test scan, sigma 10): the filtered
+panel is clearly smoother and the difference panel shows noise without
+visible structure. The 64³ test scans are too small to judge more than that
+by eye: a slice of the full scan shows fibres running along z, but a 64-voxel
+window holds only a few of them. A larger crop for visual checks, kept local
+and not tracked, is proposed for step 0.4.

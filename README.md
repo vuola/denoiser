@@ -210,8 +210,10 @@ comparison shows a clear gain, and you decide on the basis of those numbers.
 
 1. Which noise sigma did you use for samples A–D? It is needed for the baseline
    in step 0.4.
-2. Does the Ubuntu server have an NVIDIA GPU? If so it becomes the second test
-   platform for the cross-platform comparison of step 2.4.
+2. ~~Is a second test platform with an NVIDIA GPU available?~~ Answered: yes, a
+   Linux machine with an NVIDIA GPU and the CUDA compiler. It is the second
+   platform for the cross-platform comparison of step 2.4 and the CUDA platform
+   later.
 
 ---
 

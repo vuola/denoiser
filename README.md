@@ -9,6 +9,7 @@ completed.
 | Chapter | Content | Status |
 |---|---|---|
 | 1 | Project plan | Reviewed; question 3 of section 1.8 waiting for approval |
+| 2 | Existing toolkit and the pipeline for new scans | Draft, waiting for review |
 
 ---
 
@@ -75,19 +76,19 @@ denoiser/
   include/         public headers (function interface documentation lives here)
   src/             implementation and command-line program
   tests/           unit tests, regression tests, cross-platform comparison tool
-  tests/data/      64³ crops of the CT volumes (tracked) and the script that cuts them
+  tests/data/      64³ test scans cut from the CT scans (tracked) and the script that cuts them
   run/             benchmark scripts and their results, figures
   latex/           phase reports (.tex) and their figures
   third_party/     vendored dependencies (test framework, header-only readers)
-  data/            full CT volumes, 250³ (local only; data/README.txt is tracked)
+  data/            full CT scans and historical tools (local only; data/README.txt is tracked)
   ORIGINAL_CODE/   untouched reference material (local only, not in git)
 ```
 
-Test data: four real CT volumes (samples A–D, 250×250×250, 32-bit big-endian
-float, values 0–255, 62.5 MB each) live in `data/` and are ignored by git.
-`python tests/data/make_crops.py` cuts the centred 64×64×64 cube of each into
-`tests/data/` (1 MB each, tracked), so tests run from a fresh clone. Details
-are in `data/README.txt`.
+Test data: the full scans live in `data/RAW/` and are ignored by git.
+`python tests/data/make_crops.py` cuts a 64×64×64 cube from each into
+`tests/data/<scan>_c64/` as a miniature scan folder in the lab's format (`.vol`
+plus `.vgi`, 0.5 MB, tracked), so tests run from a fresh clone. Details are in
+`data/README.txt`.
 
 `include/` is not in the list of required folders but the NMSC project has it;
 it is proposed here because phase 2 puts the interface documentation in
@@ -128,22 +129,23 @@ and the source files credit both.
 | Step | Content | Result |
 |---|---|---|
 | 0.1 | Create the folder layout, `makefile`, `.gitignore` fix | `make`, `make test`, `make clean` work |
-| 0.2 | Build the original code unchanged as the reference program | Reference binary |
-| 0.3 | Synthetic test volumes (fibre-like phantom with known added noise) and a small brute-force NLM for tiny volumes | Ground truth for quality (PSNR) and correctness |
+| 0.2 | Build the original code unchanged as the reference program, with a small converter that feeds it a test scan as a temporary float file and discards the file afterwards | Reference binary usable on `.vol` test scans |
+| 0.3 | Test volumes: the 16-bit test scans in `tests/data/` (done), a synthetic fibre-like phantom with known added noise, and a small brute-force NLM for tiny volumes | Inputs in the lab's format; ground truth for quality (PSNR) and correctness |
 | 0.4 | Baseline: reference outputs, run time and memory on the test volumes | Numbers every later step is compared with |
 
 #### Phase 1 — Optimise for 3D CT data, input interface, pre-processing
 
 | Step | Content | Result |
 |---|---|---|
-| 1.1 | **Input description.** Dimensions, sample type (8/16-bit integer, 32-bit float), byte order, header offset and axis order given on the command line or in a small text file, instead of the file name | Raw CT volumes load without conversion in ImageJ |
-| 1.2 | **File formats.** Raw plus the formats your CT data comes in (see open questions) | Readers and writers |
-| 1.3 | **Pre-processing.** Intensity mapping to the working range and back, region-of-interest crop, NaN/Inf handling, output in the input's sample type | Documented, optional steps |
-| 1.4 | **Noise estimate.** Sigma from a homogeneous region or from a histogram fit, as an alternative to typing it in | `sigma` no longer has to be found by hand |
+| 1.1 | **Scan reader.** Read a scan folder as the CT lab delivers it: dimensions, sample type and voxel size from the `.vgi` file, voxels from the `.vol` file. The same description (dimensions, sample type, byte order, header offset) can be given by hand for other raw files | Scans load without ImageJ |
+| 1.2 | **Writer.** Output as `.vol` plus `.vgi` in the input's sample type, so the result opens wherever the input does | Output in the lab's format |
+| 1.3 | **Pre-processing.** Region-of-interest crop in voxel coordinates, intensity mapping to the working range and back, NaN/Inf handling | Replaces `PickCube.ijm` and `scaleToRange.py` |
+| 1.4 | **Noise estimate.** Sigma estimated from the data with the method of `estimate_noise.py`, or given by hand | Replaces `estimate_noise.py` |
 | 1.5 | **Filter parameters.** Patch radius, search radius and `h` settable; the sigma table stays as the default. Patch-size normalisation and kernel selectable: original behaviour or as in the IPOL paper | Deviations from the papers become explicit choices |
 | 1.6 | **Numerical accuracy.** Measure the float32 integral-image error; fix it if it matters | Tested accuracy statement |
 | 1.7 | **Speed and memory.** Symmetric shifts, persistent threads, smaller per-thread storage, block I/O, vectorisable prefix sums | Benchmark table against the baseline |
-| 1.8 | Phase 1 report | `latex/phase1.tex`, PDF |
+| 1.8 | **One-command run and run record.** `denoiser run <scan folder>` chains steps 1.1–1.5 and the filter, and writes a record of every setting next to the output | The pipeline of chapter 2 |
+| 1.9 | Phase 1 report | `latex/phase1.tex`, PDF |
 
 Acceptance for phase 1: with the original settings the output matches the
 reference within a stated tolerance; every intended difference is listed and
@@ -181,8 +183,8 @@ justified.
 
 | # | Question | Decision |
 |---|---|---|
-| 1 | CT data format | Headerless raw, 32-bit big-endian float, as in `data/`. Step 1.1 still adds the general description (sample type, byte order, header offset); other file formats in step 1.2 wait until a need appears |
-| 2 | Real test data | Samples A–D in `data/`, 64³ crops in `tests/data/` |
+| 1 | CT data format | Revised: scans arrive as in `data/RAW`, a 16-bit unsigned little-endian `.vol` with a `.vgi` metadata file. Input and output are `.vol` only; no float files are stored. See chapter 2 |
+| 2 | Real test data | Scans B (`Sample1_18p15_5mu`) and D (`Sample2_5mu`), 5 µm voxels; 64³ test scans in `tests/data/`. Samples A and C (20 µm voxels) are dropped |
 | 3 | Default filter behaviour | Proposed: keep the original behaviour as default, see below. Waiting for approval |
 | 4 | GPU family | NVIDIA/CUDA |
 | 5 | LaTeX | MiKTeX on this Windows PC |
@@ -210,3 +212,142 @@ comparison shows a clear gain, and you decide on the basis of those numbers.
    in step 0.4.
 2. Does the Ubuntu server have an NVIDIA GPU? If so it becomes the second test
    platform for the cross-platform comparison of step 2.4.
+
+---
+
+## 2. Existing toolkit and the pipeline for new scans
+
+Goal: a new scan from the CT lab is filtered with one documented command,
+without ImageJ, and the run can be repeated exactly.
+
+### 2.1 What the CT lab delivers
+
+Each scan is a folder such as `data/RAW/Sample2_5mu/` (phoenix nanotom,
+datos|x reconstruction):
+
+| File | Content | Used by the pipeline |
+|---|---|---|
+| `.vol` | Voxels: headerless, 16-bit unsigned, little-endian, x fastest. 1142 × 1142 × 1000 voxels, 2.6 GB | Yes |
+| `.vgi` | Text: volume size, bits per element, data type, voxel size (0.005 mm) | Yes |
+| `.pcr` | Text: reconstruction settings, and the physical values that counts 0 and 65535 stand for (`Min`, `Max`) | Recorded in the run record |
+| `.pca`, `.pcj`, `.pcp`, `.dtxml` | Acquisition geometry and per-projection log | No |
+
+The `.vgi` file does not state the byte order. Little-endian is confirmed by
+the check in section 2.3. The file size equals 1142 × 1142 × 1000 × 2 bytes, so
+there is no header.
+
+The two scans have different `Min`/`Max` in their `.pcr` files (upper value
+0.303 against 0.242), so the same count does not mean the same attenuation in
+both scans.
+
+### 2.2 Existing tools in `data/`
+
+| Tool | What it does | Problem for repeatability |
+|---|---|---|
+| ImageJ import and "Save As > Raw data" | Reads the `.vol`, converts to 32-bit float, writes big-endian raw | Menu actions; nothing records what was done |
+| `macros/PickCube.ijm` | Cuts a centred cube; size and centre typed into a dialog | Dialog input; slice numbers are 1-based |
+| `scripts/scaleToRange.py` | Maps an input range linearly to 0–255 and clips | Forces big-endian input, so it cannot read the `.vol` directly; needs numpy |
+| `scripts/estimate_noise.py` | Estimates sigma from 20 slices with five estimators; recommends the median of the neighbour-difference and local-residual estimates | Works on the float file; needs numpy |
+| `ORIGINAL_CODE/denoiserVersionA.cpp` | The filter | Float big-endian input only; dimensions from the file name |
+
+The other macros and scripts (median, Frangi and tubeness filters, CPU/GPU
+comparison scripts) are not part of the filtering chain.
+
+### 2.3 How the existing samples were made (verified)
+
+Samples B and D were recomputed from the two scans in `data/RAW` and compared
+with the existing float files, all 15.6 million voxels each:
+
+- **Crop:** the 250³ cube starts at voxel (446, 446, 374), counted from zero.
+  That is `PickCube.ijm` with the default centre. The z start is one voxel
+  lower than the x and y starts because ImageJ counts slices from 1.
+- **Scaling:** value = count × 255 / 65535. The full 16-bit range was mapped,
+  not a narrower window, and nothing was clipped.
+- **Agreement:** the largest difference is 0.000008, which is float rounding.
+
+So the range of samples B and D (for example 30–226) is the range of the data
+itself. Sample A reaches exactly 0 and 255, which would mean saturated counts
+in that scan or a different scaling. The scans of samples A and C are not in
+`data/RAW`, so this could not be checked.
+
+### 2.4 Target pipeline
+
+One program, `denoiser`, with the steps as subcommands:
+
+| Command | Purpose |
+|---|---|
+| `denoiser info <scan>` | Print what the `.vgi` says, check the file size, print value statistics |
+| `denoiser noise <scan>` | Estimate sigma |
+| `denoiser run <scan>` | Read, crop if asked, scale, estimate sigma unless given, filter, write the result and the run record |
+
+`<scan>` is the scan folder or its `.vgi` file. Filtering a new scan is then:
+
+```
+1. Copy the scan folder into data/RAW/
+2. denoiser run data/RAW/<scan name>
+```
+
+Options of `run`, all with defaults:
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--roi x0 y0 z0 w h d` | whole volume | Region to filter, zero-based voxel coordinates |
+| `--centre-cube n` | off | Shortcut for a centred n³ region |
+| `--scale lo hi` | `0 65535` | Counts mapped to the working range 0–255; the default reproduces the existing samples |
+| `--sigma s` | estimated | Noise sigma in working-range units |
+| `--out dir` | `run/<scan name>/` | Output folder |
+
+Output folder:
+
+| File | Content |
+|---|---|
+| `<scan name>_nlm.vol` | Filtered volume, 16-bit unsigned little-endian, same scaling as the input |
+| `<scan name>_nlm.vgi` | Metadata for the filtered volume (size, type, voxel size) |
+| `run_record.txt` | Program version, full command line, input file size and checksum, region, scaling, sigma and how it was obtained, filter parameters, run time |
+
+Repeating a run means running the command line stored in `run_record.txt`.
+
+### 2.5 Design choices
+
+- **One C++ program instead of Python scripts plus ImageJ.** Reading, cropping
+  and scaling are needed inside the filter anyway, because it processes the
+  volume block by block. Doing them there removes numpy and ImageJ from the
+  chain and leaves one tool to document and test. The existing scripts and
+  macros stay in `data/` as reference.
+- **No intermediate float file.** The filter reads 16-bit blocks directly from
+  the `.vol`, converts each block in memory and writes 16-bit blocks. A full
+  scan as float would be 5.2 GB on disk and in the old chain existed twice.
+- **Zero-based voxel coordinates everywhere,** so a region means the same in
+  the tool, in the record and in the test data.
+- **Sigma method kept, then examined.** Step 1.4 first reproduces what
+  `estimate_noise.py` recommends, so old and new runs are comparable. Its
+  estimators assume noise that is independent between neighbouring voxels,
+  which reconstruction filtering violates, so step 1.4 also checks it on the
+  phantom with known noise.
+- **Full scans need the speed work.** The original filter took about 14 hours
+  for a volume of this size. `run` works on a region from the start; full-scan
+  runs become practical with step 1.7.
+
+### 2.6 Decisions from the review
+
+| # | Question | Decision |
+|---|---|---|
+| 1 | Output format | `.vol` plus `.vgi` only. No float files are written or stored |
+| 2 | `data/macros`, `data/scripts` | Historical reference, not tracked. Everything in `data/` except `README.txt` is ignored by git |
+| 3 | Test material | Scans B and D (5 µm voxels) are enough. A and C (20 µm) are dropped. Future scans will have 1 µm voxels |
+
+Consequences:
+
+- **Regression baseline without stored float files.** The original program
+  reads only float input. Step 0.2 therefore converts a test scan to a
+  temporary float file, runs the original on it and deletes the file. The
+  16-bit test scans were checked against the earlier float crops before those
+  were removed: they agree to 0.000008.
+- **16-bit output loses nothing that matters.** One 16-bit count is 0.004 on
+  the 0–255 working scale, far below the noise.
+- **1 µm scans change the scale of structures.** A fibre that is a few voxels
+  wide at 5 µm is five times wider in voxels at 1 µm, and the noise per voxel
+  will differ. The patch and search radii of the sigma table are in voxels, so
+  the defaults may not suit 1 µm data. Step 1.5 makes the radii settable, the
+  run record stores the voxel size, and the defaults are reviewed when the
+  first 1 µm scan arrives.

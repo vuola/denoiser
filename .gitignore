@@ -69,6 +69,11 @@ Testing/
 # Reference material kept only locally
 ORIGINAL_CODE/
 
-# Full CT volumes stay local; data/README.txt is tracked.
-# The small crops in tests/data/ are tracked.
-/data/*.raw
+# Everything in data/ stays local (full CT scans, old float samples, and the
+# historical ImageJ macros and Python scripts); only data/README.txt is tracked.
+# The small test scans in tests/data/ are tracked.
+/data/*
+!/data/README.txt
+
+# Python cache
+__pycache__/

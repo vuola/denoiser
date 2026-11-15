@@ -19,6 +19,9 @@ Output, in the folder given with --out (default build/reference/):
                               result before rounding, 32-bit little-endian
                               float on the 0...255 scale
 
+With --bruteforce the brute-force filter (built by "make bruteforce") is run
+instead of the original program, and the files are named <scan>_bf_s<sigma>.
+
 The whole volume is held in memory, so the script is meant for the small test
 scans, not for full scans.
 
@@ -47,13 +50,16 @@ COUNTS_TO_WORK = 255.0 / 65535.0
 WORK_TO_COUNTS = 65535.0 / 255.0
 
 
-def default_program(one_worker):
-    """Return the path of a reference program built by "make reference".
+def default_program(one_worker, bruteforce=False):
+    """Return the path of a program built by "make reference" or "make bruteforce".
 
-    one_worker selects the repeatable one-worker program instead of the
-    multi-threaded one.
+    one_worker selects the repeatable one-worker reference program instead of
+    the multi-threaded one; bruteforce selects the brute-force filter.
     """
-    name = "denoiser_reference_1w" if one_worker else "denoiser_reference"
+    if bruteforce:
+        name = "denoiser_bruteforce"
+    else:
+        name = "denoiser_reference_1w" if one_worker else "denoiser_reference"
     suffix = ".exe" if os.name == "nt" else ""
     return os.path.join(REPO_ROOT, "build", name + suffix)
 
@@ -130,7 +136,7 @@ def to_counts(work_values):
     return counts, limited
 
 
-def run_reference(scan_dir, sigma, out_dir, program, keep_float):
+def run_reference(scan_dir, sigma, out_dir, program, keep_float, tag="ref"):
     """Filter the scan in scan_dir with the original program.
 
     Parameters:
@@ -139,6 +145,7 @@ def run_reference(scan_dir, sigma, out_dir, program, keep_float):
         out_dir     folder for the result (created if missing)
         program     path of the reference program
         keep_float  also keep the unrounded float result as .f32
+        tag         short text in the output name: <scan>_<tag>_s<sigma>
 
     Returns a dict with the result .vol path ("vol"), the run time of the
     program in seconds ("seconds"), the volume size ("size") and the number of
@@ -146,7 +153,8 @@ def run_reference(scan_dir, sigma, out_dir, program, keep_float):
     Raises ValueError on bad input and RuntimeError if the program fails.
     """
     if not os.path.isfile(program):
-        raise ValueError(f"{program}: not found; build it with 'make reference'")
+        raise ValueError(f"{program}: not found; build it with 'make reference' "
+                         "or 'make bruteforce'")
     # Windows does not start a program given as a relative path with "/".
     program = os.path.abspath(program)
 
@@ -160,7 +168,7 @@ def run_reference(scan_dir, sigma, out_dir, program, keep_float):
     counts = read_counts(vol_path, voxel_count)
     work = array.array("f", (count * COUNTS_TO_WORK for count in counts))
 
-    name = f"{os.path.basename(os.path.normpath(scan_dir))}_ref_s{sigma:g}"
+    name = f"{os.path.basename(os.path.normpath(scan_dir))}_{tag}_s{sigma:g}"
     os.makedirs(out_dir, exist_ok=True)
 
     temp_dir = tempfile.mkdtemp(prefix="denoiser_ref_")
@@ -188,10 +196,8 @@ def run_reference(scan_dir, sigma, out_dir, program, keep_float):
     with open(out_vol, "wb") as vol:
         result_counts.tofile(vol)
 
-    # write_vgi() writes a cube; the test scans are cubes.
-    if not width == height == depth:
-        raise ValueError("only cubic volumes are supported by this script")
-    write_vgi(os.path.join(out_dir, name + ".vgi"), name + ".vol", width, info)
+    write_vgi(os.path.join(out_dir, name + ".vgi"), name + ".vol",
+              (width, height, depth), info)
 
     if keep_float:
         if sys.byteorder == "big":
@@ -213,6 +219,9 @@ def main():
     parser.add_argument("--one-worker", action="store_true",
                         help="use the repeatable one-worker program "
                              "(build/denoiser_reference_1w)")
+    parser.add_argument("--bruteforce", action="store_true",
+                        help="use the brute-force filter (build/denoiser_bruteforce); "
+                             "the output is named <scan>_bf_s<sigma>")
     parser.add_argument("--program",
                         help="reference program, if not one of the two in build/")
     parser.add_argument("--keep-float", action="store_true",
@@ -223,8 +232,9 @@ def main():
         parser.error("--sigma must be greater than 0")
 
     try:
-        program = args.program or default_program(args.one_worker)
-        result = run_reference(args.scan, args.sigma, args.out, program, args.keep_float)
+        program = args.program or default_program(args.one_worker, args.bruteforce)
+        result = run_reference(args.scan, args.sigma, args.out, program, args.keep_float,
+                               tag="bf" if args.bruteforce else "ref")
     except (ValueError, RuntimeError) as error:
         print(f"Failed: {error}", file=sys.stderr)
         return 1

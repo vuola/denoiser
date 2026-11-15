@@ -8,10 +8,12 @@ completed.
 
 | Chapter | Content | Status |
 |---|---|---|
-| 1 | Project plan | Reviewed; question 3 of section 1.8 waiting for approval |
-| 2 | Existing toolkit and the pipeline for new scans | Draft, waiting for review |
+| 1 | Project plan | Reviewed and approved |
+| 2 | Existing toolkit and the pipeline for new scans | Reviewed and approved |
 | 3 | Step 0.1: folder layout, build and tests | Done, committed |
 | 4 | Step 0.2: the original filter as reference program | Done, committed |
+| 5 | Research objectives and the requirements they set | Reviewed and approved |
+| 6 | Step 0.3: phantom, scoring and the brute-force filter | Done, committed |
 
 ---
 
@@ -31,8 +33,13 @@ tested and documented tool for denoising 3D CT volumes, in three main phases:
 3. **Document** the work continuously in this README and as a LaTeX/PDF report
    at the end of each main phase.
 
-Writing the GPU versions themselves is outside this plan; phase 2 only prepares
-for them.
+Phase 2 prepares for GPU versions of the subfunctions. Writing them was first
+left outside this plan; the size of the coming scans (section 5.6) makes them
+necessary for production runs, so they are added as phase 5.
+
+The filter serves a measurement task: finding small air bubbles in the epoxy of
+glass-fibre rods. Chapter 5 describes that task and the requirements it sets,
+and phase 4 adds the tools for it after the filter work.
 
 ### 1.2 Starting point
 
@@ -79,6 +86,7 @@ denoiser/
   src/             implementation and command-line program
   tests/           unit tests, regression tests, cross-platform comparison tool
   tests/reference/ scripts that run the original filter and compare volumes
+  tests/phantom/   scripts that make the synthetic rod phantom and score results against it
   tests/data/      64³ test scans cut from the CT scans (tracked) and the script that cuts them
   run/             benchmark scripts and their results, figures
   latex/           phase reports (.tex) and their figures
@@ -104,7 +112,7 @@ headers.
 | Build | GNU make, one `makefile` at the root | Preferred; works on this Windows machine (MinGW g++ 16, make 4.4) and on Linux |
 | CMake | Not used for now | CPU code does not need it. CUDA on Linux builds with make and `nvcc`. CMake is added only if a CUDA build on Windows is wanted, where `nvcc` needs the Microsoft compiler instead of MinGW |
 | GPU target | NVIDIA/CUDA (later, outside this plan) | Decided in review |
-| Reports | LaTeX built with MiKTeX on Windows | Small basic install that fetches missing packages on demand |
+| Reports | LaTeX built on the second machine (TeX Live with `pdflatex` and `latexmk`); the PDF is copied back | Already installed there, so the Windows machine needs no LaTeX. MiKTeX is dropped |
 | Language | C++17 | Supported by current CPU and GPU compilers |
 | Threads | OpenMP | Same as the NMSC project; simpler than hand-made thread pools |
 | Unit tests | doctest (single header in `third_party/`) | No installation, runs with `make test` |
@@ -121,7 +129,7 @@ and the source files credit both.
 - Each step ends with a README chapter (what was done, results, open points)
   and a stop. The next step starts only after you have read the chapter and
   commented or approved.
-- One commit per approved step, on a branch per main phase.
+- One commit per approved step, on `main` (decided in review, section 3.6).
 - At the end of each main phase a LaTeX report is written from the README
   chapters and built to PDF.
 
@@ -133,8 +141,8 @@ and the source files credit both.
 |---|---|---|
 | 0.1 | Create the folder layout, `makefile`, `.gitignore` fix | `make`, `make test`, `make clean` work |
 | 0.2 | Build the original code unchanged as the reference program, with a small converter that feeds it a test scan as a temporary float file and discards the file afterwards | Reference binary usable on `.vol` test scans |
-| 0.3 | Test volumes: the 16-bit test scans in `tests/data/` (done), a synthetic fibre-like phantom with known added noise, and a small brute-force NLM for tiny volumes | Inputs in the lab's format; ground truth for quality (PSNR) and correctness |
-| 0.4 | Baseline: reference outputs, run time and memory on the test volumes | Numbers every later step is compared with |
+| 0.3 | Test volumes: the 16-bit test scans in `tests/data/` (done); a synthetic rod phantom with known noise and a known material label for every voxel (section 5.4); a scoring script (PSNR and share of misclassified voxels); a small brute-force NLM for tiny volumes | Inputs in the lab's format; ground truth for quality, classification and correctness |
+| 0.4 | Baseline: reference outputs, run time and memory on the test volumes; phantom scores of the original filter and of a median and a mean filter along z (section 5.5) | Numbers every later step is compared with |
 
 #### Phase 1 — Optimise for 3D CT data, input interface, pre-processing
 
@@ -142,17 +150,20 @@ and the source files credit both.
 |---|---|---|
 | 1.1 | **Scan reader.** Read a scan folder as the CT lab delivers it: dimensions, sample type and voxel size from the `.vgi` file, voxels from the `.vol` file. The same description (dimensions, sample type, byte order, header offset) can be given by hand for other raw files | Scans load without ImageJ |
 | 1.2 | **Writer.** Output as `.vol` plus `.vgi` in the input's sample type, so the result opens wherever the input does | Output in the lab's format |
-| 1.3 | **Pre-processing.** Region-of-interest crop in voxel coordinates, intensity mapping to the working range and back, NaN/Inf handling | Replaces `PickCube.ijm` and `scaleToRange.py` |
+| 1.3 | **Pre-processing.** Region-of-interest crop in voxel coordinates, intensity mapping to the working range and back, NaN/Inf handling. The mapping is linear and nothing is clipped by default (requirement R2). A measurement of how brightness drifts from the rod centre to the rim, as a basis for deciding on a correction (R4) | Replaces `PickCube.ijm` and `scaleToRange.py` |
 | 1.4 | **Noise estimate.** Sigma estimated from the data with the method of `estimate_noise.py`, or given by hand | Replaces `estimate_noise.py` |
-| 1.5 | **Filter parameters.** Patch radius, search radius and `h` settable; the sigma table stays as the default. Patch-size normalisation and kernel selectable: original behaviour or as in the IPOL paper | Deviations from the papers become explicit choices |
+| 1.5 | **Filter parameters.** Patch radius and search radius settable separately for x, y and z (R5), `h` settable; the sigma table with its cubes stays as the default. Patch-size normalisation and kernel selectable: original behaviour or as in the IPOL paper | Deviations from the papers become explicit choices |
 | 1.6 | **Numerical accuracy.** Measure the float32 integral-image error; fix it if it matters | Tested accuracy statement |
 | 1.7 | **Speed and memory.** Symmetric shifts, persistent threads, smaller per-thread storage, block I/O, vectorisable prefix sums | Benchmark table against the baseline |
 | 1.8 | **One-command run and run record.** `denoiser run <scan folder>` chains steps 1.1–1.5 and the filter, and writes a record of every setting next to the output | The pipeline of chapter 2 |
 | 1.9 | Phase 1 report | `latex/phase1.tex`, PDF |
 
-Acceptance for phase 1: with the original settings the output matches the
-reference within a stated tolerance; every intended difference is listed and
-justified.
+Acceptance for phase 1 (revised in the review of step 0.3, section 6.5): with
+the original settings the output matches the **brute-force filter** within a
+tight, stated tolerance on the small test volumes. The difference from the
+original program is measured and reported, and explained by the limited
+accuracy of the original's 32-bit running sums. Every intended difference is
+listed and justified.
 
 #### Phase 2 — Refactor for readability, tests and GPU replacement
 
@@ -169,18 +180,45 @@ justified.
 
 | Step | Content | Result |
 |---|---|---|
-| 3.1 | Continuous: README chapter per step (runs through phases 0–2) | This file |
-| 3.2 | Final report: theory, differences from the papers, user manual, interface reference, test and benchmark results | `latex/report.tex`, PDF |
+| 3.1 | Continuous: README chapter per step (runs through phases 0–2 and 4) | This file |
+| 3.2 | Final report: theory, differences from the papers, user manual, interface reference, test and benchmark results. Written after phase 4 | `latex/report.tex`, PDF |
+
+#### Phase 4 — Material classification and bubble analysis
+
+Added after the review of the research objectives (chapter 5). The steps are
+an outline; they are detailed when phase 2 ends and the first 1 µm scan is
+available.
+
+| Step | Content | Result |
+|---|---|---|
+| 4.1 | **Look at the data.** Histograms of the raw and the filtered volume, brightness against distance from the rod axis, values in the bore hole and in the air outside the rod | Numbers for contrast, noise and drift |
+| 4.2 | **Classification.** Label every voxel as glass, epoxy or air from the filtered volume. Output: a label volume as `.vol` plus `.vgi` | Label volume; scored on the phantom |
+| 4.3 | **Masks.** Epoxy mask shrunk away from fibre edges by a settable number of voxels; reference region inside the bore hole | Voxel sets for step 4.4 |
+| 4.4 | **Bubble search in the raw data.** Raw values of the masked epoxy voxels compared with the epoxy level and with the air level from the bore hole; connected groups of low voxels listed with position, size, mean value and significance | Candidate list and a record of the settings |
+| 4.5 | **Validation.** Phantom with voids of known size and position: share found against void size, false alarms per volume | Smallest bubble size that can be found reliably |
+| 4.6 | Phase 4 report | `latex/phase4.tex`, PDF |
+
+#### Phase 5 — GPU versions
+
+Added because a 1 µm scan is about three times the present size (section 5.6,
+requirement R9). Outline only: the subfunctions of phase 2 are replaced one at
+a time by CUDA versions on the second machine, each checked against the CPU
+reference with the comparison tool of step 2.4. The volume is processed block
+by block, so it need not fit in GPU memory. Whether phase 5 comes before or
+after phase 4 is decided at the end of phase 2, from the run times measured by
+then.
 
 ### 1.7 Risks
 
 | Risk | Handling |
 |---|---|
 | Real CT data has no noise-free ground truth | Synthetic phantom with known noise for quality figures; real crops for regression and benchmarks |
-| `ORIGINAL_CODE` is not in git, so the reference program cannot be rebuilt from a fresh clone | Reference outputs for the tracked crops are stored in `tests/data/` in step 0.4 |
-| Optimisation changes results unnoticed | Baseline outputs from step 0.4 checked in every step |
+| `ORIGINAL_CODE` is not in git, so the original program cannot be rebuilt from a fresh clone | The reference is the brute-force filter, which is in git (section 6.5). Outputs of the original program for the tracked crops are stored in `tests/data/` in step 0.4, for comparison only |
+| Optimisation changes results unnoticed | Brute-force results on the small test volumes checked in every step |
 | Float results differ between compilers and platforms | Tolerances defined in step 2.4, no unsafe math flags |
 | Readable reference becomes too slow for full volumes | Phase 1 optimised path kept as a second backend |
+| The 5 µm scans resolve a fibre with only 4 voxels, so they say little about how the filter behaves on 1 µm data | The phantom imitates the 1 µm case; defaults are reviewed when the first 1 µm scan arrives |
+| The filter removes or blurs the small bubbles that are the target | Bubbles are searched in the raw data; the filtered volume is used only for the material labels (section 5.2) |
 
 ### 1.8 Decisions from the plan review
 
@@ -188,12 +226,12 @@ justified.
 |---|---|---|
 | 1 | CT data format | Revised: scans arrive as in `data/RAW`, a 16-bit unsigned little-endian `.vol` with a `.vgi` metadata file. Input and output are `.vol` only; no float files are stored. See chapter 2 |
 | 2 | Real test data | Scans B (`Sample1_18p15_5mu`) and D (`Sample2_5mu`), 5 µm voxels; 64³ test scans in `tests/data/`. Samples A and C (20 µm voxels) are dropped |
-| 3 | Default filter behaviour | Proposed: keep the original behaviour as default, see below. Waiting for approval |
+| 3 | Default filter behaviour | Approved: the original behaviour stays the default; the IPOL variant becomes an option in step 1.5. Reasons below |
 | 4 | GPU family | NVIDIA/CUDA |
-| 5 | LaTeX | MiKTeX on this Windows PC |
+| 5 | LaTeX | Revised: TeX Live on the second machine replaces MiKTeX on the Windows PC |
 | 6 | Original code and emails | Removed from the remote repository; `ORIGINAL_CODE` is local only |
 
-**Recommendation for question 3.** Keep the behaviour of the original code
+**Decision for question 3 (approved).** Keep the behaviour of the original code
 (which is also the behaviour of the ImageJ plugin) as the default through
 phases 0–2, and add the IPOL patch-size normalisation and exponential kernel as
 options in step 1.5. Reasons:
@@ -211,12 +249,16 @@ comparison shows a clear gain, and you decide on the basis of those numbers.
 
 ### 1.9 Open questions
 
-1. Which noise sigma did you use for samples A–D? It is needed for the baseline
-   in step 0.4.
+1. ~~Which noise sigma did you use for samples A–D?~~ Answered: 17 on the
+   0–255 scale. See section 4.6.
 2. ~~Is a second test platform with an NVIDIA GPU available?~~ Answered: yes, a
    Linux machine with an NVIDIA GPU and the CUDA compiler. It is the second
    platform for the cross-platform comparison of step 2.4 and the CUDA platform
    later.
+3. ~~Geometry of the coming 1 µm scan.~~ Answered: a region inside the rod,
+   up to three times the present voxel count. Section 5.6 recommends
+   2000 × 2000 × 975 voxels and lists three points to settle with the CT lab.
+   The bore hole is 900 µm in diameter (confirmed).
 
 ---
 
@@ -438,11 +480,13 @@ Both builds are free of compiler warnings. After the step was committed,
 
 ### 3.6 Open points
 
-- LaTeX is not installed on either machine yet. It is needed for step 1.9 at
-  the earliest.
-- The section 1.5 rule "a branch per main phase" has not been applied: all
-  commits so far are on `main`. Proposal: keep working on `main`, since there
-  is one developer and each step is reviewed before it is committed.
+- ~~LaTeX is not installed on either machine yet.~~ Resolved: LaTeX is now
+  installed on the second machine (`pdflatex` and `latexmk` found there).
+  Reports are built on that machine; a make target that sends the report
+  source there and fetches the PDF is added with the first report (step 1.9).
+- ~~Branch per main phase or `main`?~~ Decided: work continues on `main`.
+  There is one developer and each step is reviewed before it is committed.
+  Section 1.5 is changed accordingly.
 
 ---
 
@@ -537,9 +581,12 @@ step 0.4 measures properly.
 
 ### 4.5 What this means for later steps
 
-- **The one-worker program is the regression reference.** Its output is the
-  same on every run and on both platforms, so later code can be required to
-  match it exactly where the arithmetic is unchanged.
+- **The one-worker program is the repeatable form of the original.** Its
+  output is the same on every run and on both platforms. It was first meant
+  as the regression reference; step 0.3 found that its 32-bit running sums
+  are not accurate enough for that, and the brute-force filter took over that
+  role (section 6.5). The one-worker program remains the way to state how far
+  new code is from the original.
 - **The 0.0055 difference is a first measurement for step 1.6.** One worker
   adds 9260 terms per voxel in one long chain; several workers add shorter
   chains. The gap between the two is rounding error of 32-bit sums, and it
@@ -553,13 +600,19 @@ step 0.4 measures properly.
 
 ### 4.6 Open points
 
-- The sigma of 10 used here is a placeholder. A rough neighbour-difference
-  estimate on the two test scans gives 12 and 14 on the 0–255 scale; the
-  proper estimate is step 1.4. Step 0.4 will take the baseline at several
-  sigma values so that all rows of the parameter table that matter are
-  covered.
-- The `.vgi` writer shared with `make_crops.py` handles cubes only. That is
-  enough for the test scans; the real writer is step 1.2.
+- The sigma of 10 used here was a placeholder. The earlier filtering of these
+  samples used sigma 17 (answered in review). The two values fall in
+  different rows of the original parameter table: up to 15 the patch radius
+  is 1, from 15 to 30 it is 2. The runs above therefore did not exercise the
+  patch size that was actually used. Step 0.4 takes the baseline at sigma 17
+  and at sigma 10, so both rows are covered.
+- A rough neighbour-difference estimate on the two test scans gives 12 and
+  14, below the table's limit of 15, while 17 is above it. The estimate thus
+  decides the patch size; step 1.4 looks at this when it reproduces the
+  earlier estimate.
+- ~~The `.vgi` writer shared with `make_crops.py` handles cubes only.~~
+  Resolved in step 0.3: it accepts any volume size. The real writer is still
+  step 1.2.
 
 ### 4.7 Visual inspection
 
@@ -590,3 +643,419 @@ visible structure. The 64³ test scans are too small to judge more than that
 by eye: a slice of the full scan shows fibres running along z, but a 64-voxel
 window holds only a few of them. A larger crop for visual checks, kept local
 and not tracked, is proposed for step 0.4.
+
+---
+
+## 5. Research objectives and the requirements they set
+
+Status: reviewed and approved. This chapter records
+what the filter is for and what follows from it for the plan of section 1.6.
+
+### 5.1 The measurement task
+
+The samples are pultruded glass-fibre rods: glass fibres running along the
+rod, with epoxy between them. The question to answer is whether the epoxy
+holds small air bubbles.
+
+| Property | Value | Source |
+|---|---|---|
+| Fibre diameter | about 20 µm | Project owner |
+| Glass share of the volume | about 60 % (datasheet: more than 60 %) | Project owner, supplier datasheet |
+| Fibre direction | Along the scan's z axis. Fibre positions drift sideways from slice to slice and form gently twisted, rope-like bundles; no sharp bends | Project owner, from the 5 µm scans |
+| Earlier experience | A median filter along z over 33 voxels (165 µm), with no window in x and y, improved the contrast of the 5 µm scans clearly | Project owner; parameters from the macros in `data/macros` (section 5.5) |
+| Coming scans | 1 µm voxels; rod turned down from 18.15 mm to 5 mm diameter; a hole drilled along the axis as an air reference; scanned region inside the rod, up to three times the present voxel count | Project owner; see section 5.6 |
+
+What these numbers mean in voxels, assuming evenly spaced fibres:
+
+| Quantity | Size | At 5 µm voxels | At 1 µm voxels |
+|---|---|---|---|
+| Fibre diameter | 20 µm | 4 | 20 |
+| Distance between fibre centres | about 25 µm | 5 | 25 |
+| Epoxy gap between two neighbouring fibres | about 5 µm | 1 | 5 |
+| Largest epoxy pocket between three fibres | about 8 µm across | 1–2 | 8 |
+| Window along z of the earlier median filter | 165 µm | 33 | 165 |
+
+Two things follow directly. At 5 µm the epoxy is at most two voxels wide, so
+the present scans cannot show glass and epoxy as separate regions; the 1 µm
+scans can. And a bubble that sits in the epoxy without pushing fibres aside is
+at most a few micrometres across: a handful of voxels even at 1 µm.
+
+### 5.2 The analysis chain
+
+| Stage | Input | Output | Phase |
+|---|---|---|---|
+| 1. Denoise | Raw scan | Filtered volume | 1–2 |
+| 2. Classify | Filtered volume | Label per voxel: glass, epoxy or air | 4 |
+| 3. Mask | Labels | Epoxy voxels away from fibre edges; air voxels in the bore hole | 4 |
+| 4. Search | **Raw** scan, masks | Bubble candidates, judged against the epoxy level and the bore-hole air level | 4 |
+
+The search goes back to the raw values on purpose. Non-local means averages
+voxels whose surroundings look alike. A small bubble has few look-alikes, so
+the filter either leaves it noisy or blends it into the epoxy. The filtered
+volume is therefore used only to decide where the epoxy is.
+
+### 5.3 Requirements
+
+| # | Requirement | Reason | Where |
+|---|---|---|---|
+| R1 | Filter quality is judged by how well glass and epoxy can be told apart afterwards: share of misclassified voxels on the phantom, and whether fibre edges stay in place. PSNR is reported too but does not decide | Stage 2 is what the filter is for | Steps 0.3, 0.4, 1.5 |
+| R2 | Voxel values stay linear from input to output: no clipping, no contrast stretch, same count scale in and out | The bore-hole calibration compares raw and filtered values with a reference level | Steps 1.2, 1.3 |
+| R3 | The filtered volume has exactly the same voxel grid as the input, or a region of it with its offset in the run record | Masks made from the filtered volume are applied to the raw scan | Steps 1.3, 1.8 |
+| R4 | Slow brightness drift across the rod is measured, and corrected if it would move the glass/epoxy threshold | A full slice of the 5 µm scans is not equally bright at centre and rim. The bore hole gives the air level at the centre only; air outside the rod gives a second point at the rim | Step 1.3 (measure), 4.1–4.2 |
+| R5 | Search radius and patch radius are settable per axis | Section 5.5 | Step 1.5 |
+| R6 | The epoxy mask can be shrunk by a settable number of voxels | A voxel on a fibre edge holds part glass and part epoxy and reads like "unusual epoxy", just as a bubble edge does | Step 4.3 |
+| R7 | The bubble search states the smallest bubble it can find reliably | A bubble of N voxels stands out by contrast × √N / noise. Contrast comes from the bore hole, noise from the raw epoxy voxels. Single-voxel bubbles will probably stay below the limit | Steps 4.4, 4.5 |
+| R8 | Filter defaults are reviewed on the first 1 µm scan | Radii are in voxels; structures are five times larger in voxels than in the scans used so far | Steps 1.5, 1.8 |
+| R9 | A scan of 3.9 × 10⁹ voxels (three times the present size) is filtered in a practical time, block by block, on a GPU with less memory than the scan | Section 5.6 | Step 1.7, phase 2, phase 5 |
+
+### 5.4 The phantom of step 0.3
+
+The phantom imitates the 1 µm case, because the tracked 5 µm test scans cannot
+show the structures that matter (section 5.1).
+
+- Cylinders of 20 voxels diameter along z, filling about 60 % of the volume,
+  with a small tilt and sideways drift so that they are not perfectly aligned.
+- Epoxy between them, at a lower value than glass.
+- An air-filled hole along the axis.
+- Voids of several sizes in the epoxy, at known positions.
+- Added noise of known strength; optionally a slow brightness drift from
+  centre to rim.
+- Written as `.vol` plus `.vgi`, together with the noise-free volume and the
+  true label of every voxel.
+
+A second, coarser version with fibres 4 voxels thick imitates the present
+5 µm scans. Size, grey levels and noise strength are fixed in step 0.3; the
+grey levels start from the histograms of the real scans.
+
+### 5.5 Using the fibre direction in the filter
+
+The structure changes slowly along z and quickly across it. The filter can
+use that in two ways, both cheap in this algorithm:
+
+| Change | Effect | Cost |
+|---|---|---|
+| Search window longer along z, shorter across | More true look-alikes per voxel | Lower than now: 11 × 11 × 41 shifts are about half of 21 × 21 × 21 |
+| Patch longer along z | Patch comparison is less noisy, without mixing across fibre edges | None: the patch sum takes 8 look-ups for any box size |
+
+Decision proposed: step 1.5 makes the radii settable per axis (R5). The
+default stays the cube of the original code, so the regression baseline holds.
+Whether a stretched window becomes the default is decided from the phantom
+scores.
+
+The filter used earlier on these rods is added to the baseline of step 0.4 as
+a competitor. According to the macros kept in `data/macros`
+(`median_filter_current_image.ijm`, `open_and_median_filter.ijm`) it was
+ImageJ's "Median 3D" with radii x = 0, y = 0, z = 16 (an earlier setting,
+commented out, was z = 15). That is a median over a single column of 33 voxels
+along z, 165 µm at 5 µm voxels, with no window in x and y. The baseline holds
+two filters along z with that window: the median, and the mean for comparison.
+
+Both are far cheaper than NLM. Their weakness is the twist: within the window
+a fibre moves sideways, so they mix glass and epoxy at fibre edges, while NLM
+still finds matching voxels in the neighbouring columns. The median handles
+this better than the mean, because it keeps an edge as long as the fibre
+stays in the column for more than half the window. The phantom scores show
+how much NLM gains over them, and at what tilt.
+
+### 5.6 Size of the 1 µm scan
+
+Answered in review: the scanned region is widened in x and y so that it holds
+enough rod around the bore hole, and shortened in z if the voxel count gets
+too large. It stays inside the 5 mm rod sideways. The total may grow to three
+times the present count: 3 × 1142 × 1142 × 1000 = 3.9 × 10⁹ voxels.
+
+The bore hole is 900 µm in diameter (confirmed in review), which is 900 voxels.
+
+| x × y × z (voxels = µm) | Rod around the hole, each side | Rod volume in the scan | Share of voxels that is rod | `.vol` size |
+|---|---|---|---|---|
+| 1600 × 1600 × 1500 | 350 µm (14 fibre spacings) | 2.9 mm³ | 75 % | 7.7 GB |
+| **2000 × 2000 × 975** | **550 µm (22 fibre spacings)** | **3.3 mm³** | **84 %** | **7.8 GB** |
+| 2400 × 2400 × 675 | 750 µm (30 fibre spacings) | 3.5 mm³ | 89 % | 7.8 GB |
+
+**Recommended: 2000 × 2000 × 975**, with the bore hole centred.
+
+- The ring of rod around the hole is 22 fibre spacings wide. That holds
+  several thousand fibres per slice and leaves material well away from the
+  drilled surface, where drilling damage could be mistaken for bubbles.
+- 975 slices are about the present depth. The filter needs depth only for its
+  search along z (some tens of voxels), so more slices mainly add more of the
+  same fibres, while more width adds new fibres and new epoxy pockets.
+- Going wider than 2000 gains little rod volume (3.5 against 3.3 mm³) and
+  costs a third of the depth.
+
+Points to settle with the CT lab:
+
+1. **Detector width.** The metadata of the present scans show a detector of
+   1152 × 1152 pixels, which gives the 1142 voxels across. If a single scan
+   cannot be wider than that, 2000 voxels need a finer detector mode or
+   several scans joined together. If neither is possible, the fallback is
+   about 1150 × 1150 × 2900 with the hole off-centre, so that the field of
+   view holds a segment of the hole and otherwise rod. A centred 900 µm hole
+   would leave a ring of only 125 µm.
+2. **Scan inside the sample.** The field of view (2 mm) is smaller than the
+   sample (5 mm). Reconstructions of such scans typically show a brightness
+   drift towards the edge of the field of view. That makes requirement R4
+   more important, and the air outside the rod is no longer available as a
+   second reference: the bore hole is the only air in the picture.
+3. **Hole size.** The air reference needs some thousands of voxels, not
+   600 000 per slice. A smaller hole (200–300 µm), if it can be drilled,
+   would leave more of the scan for rod.
+
+Consequences for this project:
+
+- **Run time.** The filter's time grows in proportion to the voxel count. The
+  original program would need about 40 hours for such a scan (14 hours for
+  the present size, according to its author). Production runs therefore need
+  the speed work of step 1.7 and a GPU version (requirement R9).
+- **Memory.** The scan is 7.8 GB as 16-bit counts and twice that as floats,
+  more than the memory of the GPU on the second machine. The filter must work
+  block by block on the GPU too; the block design of phase 2 allows that.
+- **No fixed size.** Nothing in the code may assume 1142 × 1142 × 1000 or a
+  cube; readers and writers take the size from the `.vgi` file.
+
+### 5.7 Changes to the plan
+
+| Place | Change |
+|---|---|
+| Section 1.1 | Pointer to this chapter |
+| Step 0.3 | Phantom as in section 5.4, with true labels; scoring script |
+| Step 0.4 | Phantom scores of the original filter and of a median and a mean filter along z |
+| Step 1.3 | Linear, unclipped mapping stated as a requirement; brightness drift measured |
+| Step 1.5 | Radii settable per axis |
+| Phase 4 (new) | Classification, masks, bubble search, validation, report |
+| Phase 5 (new) | GPU versions of the subfunctions, needed for production runs on 1 µm scans |
+| Sections 1.9, 4.6 | Sigma 17 recorded; the baseline of step 0.4 includes it |
+| Step 3.2 | Final report moves after phase 4 |
+| Sections 1.7, 1.9 | Two risks and the geometry question added |
+
+---
+
+## 6. Step 0.3 — Phantom, scoring and the brute-force filter
+
+Status: done and committed.
+
+### 6.1 What was added
+
+| Path | Content |
+|---|---|
+| `tests/phantom/make_phantom.py` | Makes a synthetic rod scan with known noise, the noise-free volume and the true material of every voxel (section 6.2) |
+| `tests/phantom/score.py` | Scores a volume against a phantom: error, share of misclassified voxels, void contrast (section 6.3) |
+| `include/nlm_bruteforce.hpp`, `src/nlm_bruteforce.cpp` | The filter written straight from its definition, in double precision, with radii per axis; and the parameter table of the original program as a function (section 6.4) |
+| `tests/test_nlm_bruteforce.cpp` | Eight unit tests of the two functions |
+| `tests/reference/bruteforce_main.cpp`, `make bruteforce` | The brute-force filter behind the command line of the original program -> `build/denoiser_bruteforce` |
+| `tests/reference/run_reference.py` | New option `--bruteforce`; volumes no longer need to be cubes |
+| `tests/data/make_crops.py` | The shared `.vgi` writer accepts any volume size |
+
+### 6.2 The phantom
+
+```
+python tests/phantom/make_phantom.py --preset fine
+python tests/phantom/make_phantom.py --preset coarse
+```
+
+Output below `build/phantom/` (not tracked; the same seed gives the same
+files on every platform):
+
+| Folder | Content |
+|---|---|
+| `<name>/` | The noisy scan as `.vol` + `.vgi`, 16-bit; `phantom.txt` with every setting, voxel counts and file checksums; `voids.csv` with centre, diameter and voxel count of every void |
+| `<name>_clean/` | The same volume without noise |
+| `<name>_labels/` | Material of every voxel, 8-bit: 0 air in the bore hole, 1 epoxy, 2 glass, 3 air in a void; 16 is added for an edge voxel that mixes two materials |
+
+| Setting | `fine` (imitates 1 µm scans) | `coarse` (imitates 5 µm scans) |
+|---|---|---|
+| Size | 160 × 160 × 96 | 64 × 64 × 64 |
+| Fibre diameter | 20 voxels | 4 voxels |
+| Bore-hole diameter | 40 voxels | 16 voxels |
+| Void diameters, 6 voids of each | 1, 3, 5, 7 voxels | 1, 3 voxels |
+| Twist about the rod axis | 0.0005 rad per slice | 0.0025 rad per slice |
+| Glass share | 60 % requested; 59 % and 60 % obtained outside the bore hole | |
+| Sideways tilt | 0.02 in x and 0.01 in y, voxels per slice | |
+| Noise sigma | 14 on the 0–255 scale (3598 counts) | |
+
+Every setting can be changed on the command line (`--size`, `--sigma`,
+`--twist`, `--void-diameters`, `--drift` for a brightness drift from centre to
+rim, and so on; see `--help`).
+
+How it is built:
+
+- **Fibres** are circles on a hexagonal grid whose spacing gives the glass
+  share. Each is moved by a random offset small enough that fibres never
+  overlap. From slice to slice all fibres rotate about the rod axis and shift
+  sideways together, so they stay apart at every depth. The bore hole stays on
+  the axis.
+- **Edges** are one voxel wide: a voxel cut by a fibre edge or by the bore
+  wall gets a mixed value.
+- **Voids** are balls centred on a pure-epoxy voxel. Only epoxy voxels inside
+  the ball become air, so the fibres around a large void cut into it, as they
+  would around a real bubble that does not push fibres aside. A void of
+  7 voxels diameter keeps 120–170 of the ball's 179 voxels.
+- **Noise** is independent from voxel to voxel and very close to a normal
+  distribution. It is made from integer random numbers only, which is what
+  makes the files identical on both platforms.
+
+Grey levels, in counts:
+
+| Material | Level | Where it comes from |
+|---|---|---|
+| Air | 18 000 | The `.pcr` files of the two scans give the attenuation that counts 0 and 65535 stand for; zero attenuation falls at count 17 900 and 15 400 |
+| Epoxy | 26 000 | Assumption, see below |
+| Glass | 38 000 | Assumption, see below |
+
+The mean count of the two test scans is 32 900 and 27 600. That mean is a mix
+of 60 % glass and 40 % epoxy, which the 5 µm scans do not show separately. The
+split assumes that glass attenuates 2.5 times as strongly as epoxy. This ratio
+is an assumption of mine, not a measurement; it sets the contrast between
+glass and epoxy (12 000 counts, 3.3 times the noise sigma) and so how hard the
+phantom is. It is to be replaced by the measured ratio from the first 1 µm
+scan.
+
+What the phantom leaves out: real CT noise is correlated between neighbouring
+voxels, real edges are blurred over more than one voxel, and fibres vary in
+diameter. These can be added when the first 1 µm scan shows how much they
+matter.
+
+### 6.3 The scores
+
+```
+python tests/phantom/score.py build/phantom/phantom_fine <volume to score>
+```
+
+| Score | Meaning |
+|---|---|
+| `rmse`, `psnr` | Error against the noise-free volume, on the 0–255 scale; PSNR = 20 log₁₀(255 / rmse) |
+| `wrong_all` | Share of voxels classified wrongly. Each voxel is classified from its value alone, with fixed thresholds halfway between the air, epoxy and glass levels |
+| `wrong_interior` | The same among voxels that hold one material only |
+| `wrong_edge` | The same among edge voxels |
+| `void_contrast` | How much of the step from epoxy down to air is left in the void voxels: 1 = as dark as air, 0 = filled in to the epoxy level |
+
+A table of true material against classified material is printed as well.
+
+First scores, with the original program (the proper baseline is step 0.4):
+
+| Phantom | Volume scored | PSNR | `wrong_all` | `wrong_interior` | `wrong_edge` | `void_contrast` |
+|---|---|---|---|---|---|---|
+| fine | Noisy scan, unfiltered | 25.2 dB | 12.1 % | 10.2 % | 25.6 % | 0.98 |
+| fine | Original filter, sigma 14 | 38.1 dB | 1.5 % | 0.06 % | 11.8 % | 0.07 |
+| fine | Original filter, sigma 17 | 39.9 dB | 1.2 % | 0.05 % | 9.3 % | 0.25 |
+| coarse | Noisy scan, unfiltered | 25.2 dB | 18.1 % | 8.2 % | 26.2 % | 1.04 |
+| coarse | Original filter, sigma 14 | 31.8 dB | 8.5 % | 0.17 % | 15.2 % | −0.57 |
+| coarse | Original filter, sigma 17 | 32.0 dB | 7.5 % | 0.09 % | 13.5 % | −0.23 |
+
+What the numbers say:
+
+- **The filter does what the classification needs.** On the fine phantom the
+  share of wrongly classified voxels falls from 12 % to about 1 %, and nearly
+  all remaining errors are edge voxels, which are mixtures anyway.
+- **The filter removes the voids.** In the unfiltered scan the void voxels are
+  as dark as air (contrast 0.98). After filtering only 7–25 % of the step is
+  left. This confirms the plan of section 5.2: bubbles must be searched in the
+  raw data.
+- **At 5 µm the filter cannot separate the materials.** On the coarse phantom
+  8 % of the voxels stay wrong, and the voids end up brighter than the epoxy
+  around them (negative contrast), because the filter fills them with values
+  from nearby glass edges.
+- **Sigma 17 scores better than the true sigma of 14 here.** Sigma 17 uses the
+  larger patch of the parameter table (radius 2 instead of 1). Step 0.4 looks
+  at this over a range of sigma values.
+
+### 6.4 The brute-force filter
+
+`nlmBruteForce()` computes the filter exactly as its definition reads: for
+every voxel and every shift in the search window it sums the squared
+differences of the two patches voxel by voxel, turns the sum into a weight
+and averages. The formulas, taken from the original source, are written out in
+`include/nlm_bruteforce.hpp`. Differences from the original program are in
+the arithmetic only:
+
+| | Original program | Brute force |
+|---|---|---|
+| Patch distance | Through a running-sum table in 32-bit floats | Summed directly in double precision |
+| Weighted sums | 32-bit floats | Double precision |
+| Order of operations | Depends on thread timing (section 4.3) | Fixed per voxel; independent of the number of threads |
+| Patch and search radius | One value for all axes | One value per axis (requirement R5) |
+| Cost per voxel and shift | 8 look-ups | One operation per patch voxel |
+
+It is slow by design and meant for volumes up to about 64³: a 64³ volume at
+sigma 10 takes 34 s on the development machine.
+
+`originalParams(sigma)` returns the patch radius, search radius and `h` that
+the original program picks for a noise level.
+
+Unit tests (`make test`, now 10 test cases with 772 checks): the parameter
+table; a constant volume stays unchanged; a three-voxel case worked out by
+hand; a search window of one voxel returns the input; results stay within the
+input's range; mirroring the volume mirrors the result; swapping two axes of
+volume and radii swaps the result; bad arguments are rejected.
+
+### 6.5 Finding: the original program's 32-bit running sums cost accuracy
+
+```
+make bruteforce
+python tests/reference/run_reference.py build/phantom/phantom_tiny --sigma 10 --bruteforce --keep-float
+python tests/reference/run_reference.py build/phantom/phantom_tiny --sigma 10 --one-worker --keep-float
+python tests/reference/compare_volumes.py build/reference/phantom_tiny_ref_s10.f32 build/reference/phantom_tiny_bf_s10.f32
+```
+
+Brute force against the one-worker original program, differences on the 0–255
+scale:
+
+| Volume | Sigma | Largest difference | RMS difference |
+|---|---|---|---|
+| 32³ phantom | 10 | 2.37 | 0.037 |
+| 32³ phantom | 17 | 0.53 | 0.012 |
+| 64³ test scan (Sample2) | 10 | 2.74 | 0.049 |
+
+A difference of 2.7 is about 700 counts. Most voxels agree closely; a small
+number are off by a lot, at any distance from the volume's edge.
+
+To find the cause, a throwaway copy of the original source was changed in one
+respect only: the running-sum table and the distance taken from it were
+switched from 32-bit to 64-bit floats. That copy agrees with the brute-force
+filter to 0.007 at the worst (RMS 0.0006) for both sigma values. So:
+
+- **The brute-force filter computes the same filter as the original
+  program.** The definition in the header is the right one.
+- **The differences come from the 32-bit running sums.** The table adds up
+  squared differences over the whole block, reaching values of 10⁸ and more,
+  where a 32-bit float resolves only steps of 8 or 16. A patch distance is
+  the small difference of eight such large numbers, so it is off by tens,
+  while the filter strength `h²` is 16 (at sigma 10). For voxels with few
+  good matches that error changes the weights noticeably.
+- **The error grows with the block size.** The original program works in
+  blocks of 256³, where the running sums are far larger than in these small
+  volumes. Step 0.4 measures this on a larger crop.
+
+This answers the "numerical risk (not yet tested)" of section 1.2 ahead of
+step 1.6: the risk is real, and double precision in the running sums removes
+it. The consequence for the acceptance rule of phase 1 ("the output matches
+the reference within a stated tolerance") is that the tolerance against the
+original program cannot be tight.
+
+**Decided in review: the brute-force filter is the reference.** New code is
+required to match it tightly on the small test volumes. Its difference from
+the original program is measured, reported and explained by this finding.
+The acceptance rule in section 1.6 is changed accordingly. Because the
+brute-force filter is in git, the reference can now be rebuilt from a fresh
+clone, which the original program could not.
+
+### 6.6 Results on both platforms
+
+| Check | Development machine (Windows, MinGW g++ 16.2) | Second machine (Linux, g++ 15.2) |
+|---|---|---|
+| `make test` | 10 test cases, 772 checks, all pass | the same |
+| `make test SANITIZE=1` | not available | all pass, no sanitizer report |
+| Compiler warnings | none | none |
+| Phantom files (fine, coarse and a 32³ one) | | checksums identical to the development machine |
+| Brute-force result on the 32³ phantom | | identical, bit for bit |
+| Brute force, 32³ phantom, sigma 10 | 8 s | 1.2 s |
+
+### 6.7 Open points
+
+- **Glass-to-epoxy ratio of 2.5** is assumed (section 6.2).
+- **The phantoms are not tracked.** They are regenerated from the seed, and
+  the checksums in `phantom.txt` show that both platforms get the same files.
+  Step 0.4 stores the reference outputs it needs in `tests/data/`.
+- **The Python scripts are for phantoms only.** Generating and scoring the
+  fine phantom take a few seconds each, but both hold the volume in memory, so
+  they do not suit full scans.

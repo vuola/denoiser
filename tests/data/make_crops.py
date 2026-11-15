@@ -69,23 +69,27 @@ def read_vgi(vgi_path):
 
 
 def write_vgi(vgi_path, vol_name, size, info):
-    """Write a minimal .vgi file for a cube of edge `size` voxels.
+    """Write a minimal .vgi file for a volume.
 
-    `info` is the dict returned by read_vgi() for the source scan; data type,
-    bits per voxel and voxel size are copied from it. No path or name from the
-    source file is copied.
+    `size` is (width, height, depth) in voxels, or one number for a cube.
+    `info` is a dict as returned by read_vgi(); data type, bits per voxel and
+    voxel size are taken from it. No path or name from a source file is
+    copied.
     """
+    if isinstance(size, int):
+        size = (size, size, size)
+    size_text = " ".join(str(n) for n in size)
     max_value = 2 ** info["bits"] - 1
     lines = [
         "{volume1}",
         "[representation]",
-        f"size = {size} {size} {size}",
+        f"size = {size_text}",
         f"bitsperelement = {info['bits']}",
         f"datatype = {info['datatype']}",
         f"datarange = 0 {max_value}",
         "[file1]",
         "FileFormat = raw",
-        f"Size = {size} {size} {size}",
+        f"Size = {size_text}",
         f"Name = {vol_name}",
         f"bitsperelement = {info['bits']}",
         f"datatype = {info['datatype']}",

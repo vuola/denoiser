@@ -4,6 +4,7 @@
 #   make test          build and run the unit tests -> build/run_tests
 #   make reference     build the original, unchanged filter -> build/denoiser_reference
 #                      and its one-worker variant          -> build/denoiser_reference_1w
+#   make bruteforce    build the slow definition-based filter -> build/denoiser_bruteforce
 #   make clean         remove all build output
 #   make remote-test   run the tests of the last commit on the remote machine
 #   make help          list the targets
@@ -56,7 +57,7 @@ TEST_OBJ := $(TEST_SRC:%.cpp=$(BUILD)/%.o)
 PROGRAM  := $(BUILD)/denoiser$(EXE)
 TESTS    := $(BUILD)/run_tests$(EXE)
 
-.PHONY: all test reference clean remote-test help
+.PHONY: all test reference bruteforce clean remote-test help
 
 all: $(PROGRAM)
 
@@ -110,6 +111,17 @@ $(REFERENCE_1W): $(REFERENCE_SRC) tests/reference/one_worker.cpp
 	@mkdir -p $(BUILD)
 	$(REFERENCE_CXX) $^ $(LDFLAGS) $(ONE_WORKER_LDFLAGS) -pthread -o $@
 
+# The brute-force filter (src/nlm_bruteforce.cpp) behind the command line of
+# the original program, so that tests/reference/run_reference.py can run it.
+BRUTEFORCE := $(BUILD)/denoiser_bruteforce$(EXE)
+
+bruteforce: $(BRUTEFORCE)
+
+$(BRUTEFORCE): $(BUILD)/tests/reference/bruteforce_main.o $(LIB_OBJ)
+	$(CXX) $(CXXFLAGS) $(OPENMP) $^ $(LDFLAGS) -o $@
+
+-include $(BUILD)/tests/reference/bruteforce_main.d
+
 clean:
 	rm -rf build build-san
 
@@ -121,4 +133,4 @@ remote-test:
 	ssh $(REMOTE) "cd $(REMOTE_DIR) && git checkout --quiet --force --detach remote-test && make test"
 
 help:
-	@sed -n '2,14p' makefile
+	@sed -n '2,15p' makefile

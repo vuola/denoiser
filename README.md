@@ -16,6 +16,7 @@ completed.
 | 6 | Step 0.3: phantom, scoring and the brute-force filter | Done, committed |
 | 7 | Step 0.4: baseline (run time, memory, accuracy, phantom scores) | Done, committed |
 | 8 | Step 1.1: scan reader and the command `denoiser info` | Done, committed |
+| 9 | Step 1.2: scan writer | Done, committed |
 
 ---
 
@@ -1487,3 +1488,102 @@ Statistics of the full scans, in counts:
   with anyway; step 1.7 decides whether blocks are converted on the fly.
 - **Step 1.2 (writer) is next.** It writes `.vol` plus `.vgi` in the input's
   sample type and uses the description of this step.
+
+---
+
+## 9. Step 1.2 — Scan writer
+
+Status: **done, committed.**
+
+The program can now write a volume in the CT lab's format, `.vol` plus
+`.vgi`, in the same sample type as the input. A full scan read with the
+reader of step 1.1 and written back block by block is identical to the
+original, byte for byte.
+
+### 9.1 What was added
+
+| File | Purpose |
+|---|---|
+| `include/scan_writer.hpp`, `src/scan_writer.cpp` | The scan writer |
+| `tests/test_scan_writer.cpp` | 8 test cases for the writer |
+
+The program version is now 1.2.0. There is no new command: the writer is
+used by `denoiser run` (step 1.8) and, before that, by the tests and by the
+pre-processing of step 1.3.
+
+### 9.2 The writer
+
+All functions are documented in `include/scan_writer.hpp`.
+
+| Function | What it does |
+|---|---|
+| `createScan(info)` | Writes the `.vgi` file and creates the `.vol` file at its full size, all voxels zero |
+| `writeRegion(info, region, values)` | Writes a box of voxels into that file; everything outside the box stays as it is |
+| `writeVolume(info, values)` | Both of the above for a volume held in memory |
+| `vgiText(info)` | The text of the `.vgi` file |
+
+The description `info` is the same one the reader returns. Writing a result
+in the input's format is therefore: copy the input's description, change the
+file name, write.
+
+How it behaves:
+
+- **Block by block.** A large result is created once and then filled region
+  by region, in any order. This is what the filter needs, since it works on
+  blocks and never holds a full scan in memory.
+- **Same sample type as the input:** 8-bit or 16-bit unsigned integers or
+  32-bit floats, in either byte order.
+- **Rounding.** Values arrive as floats. For integer types they are rounded
+  to the nearest whole number.
+- **Nothing is cut off unnoticed.** A value below 0 or above the largest
+  storable number (65535 for 16 bits) is stored as that limit, and NaN as 0.
+  Every write returns how many values were below, above or NaN, so the
+  caller can report it. With float output all values are stored unchanged.
+- **The `.vgi` file** holds the size, the sample type, the voxel file's name
+  without any folder, and the voxel size. For 16-bit scans it is, character
+  for character, the format of the tracked test scans. No path is written,
+  so nothing about the computer that made the file gets into it.
+- **Guard against writing into the wrong file.** Before writing a region
+  the file's size is checked against the description; a file that does not
+  match is refused.
+- **Files are written without a header,** as the lab's files are.
+
+### 9.3 Tests
+
+| Test case | Checks |
+|---|---|
+| `.vgi` text | Exact text for a 16-bit scan; float; no folder in the text; the reader of step 1.1 understands it |
+| Creating a scan | Both files exist, all voxels zero, the reader opens it, creating again replaces it |
+| Write and read back | 16-bit in both byte orders (bytes on disk checked), 8-bit, float in both byte orders |
+| Values that do not fit | Rounding at the halves, values below and above the range, NaN, infinity: stored values and counts, for 16-bit, 8-bit and float |
+| A region | The box holds the values, every voxel outside it is untouched |
+| Blocks against the whole | A volume written in 12 blocks, last block first, and one written slice by slice are byte-identical to the same volume written at once |
+| Refusals | Regions that do not fit, wrong number of values, a file of another size, a missing file, a header, an empty name, a missing folder; the file is left as it was |
+| Tracked test scans | Read and written back: `.vol` and `.vgi` identical to the originals, byte for byte |
+
+### 9.4 Results on both platforms
+
+| Check | Development machine | Second machine |
+|---|---|---|
+| `make test` | 28 test cases, 1172 checks, all pass | the same |
+| `make test SANITIZE=1` | not available | all pass, no sanitizer report |
+| Compiler warnings | none | none |
+| Full scan `Sample2_5mu` (2.6 GB) copied in slabs of 50 slices, last slab first | identical to the original, byte for byte; 18 s for reading and writing | not run (the full scans are on the development machine only) |
+
+The full-scan copy also shows that file positions beyond 2 GB are
+handled correctly when writing.
+
+### 9.5 Open points
+
+- **Rounding of exact halves.** A value exactly halfway between two counts
+  is rounded away from zero (2.5 becomes 3). The Python scripts of phase 0
+  do the same for the values that occur there. It matters only for
+  bit-for-bit comparisons, and those compare programs that use this writer.
+- **What the caller does with the counts** of limited values is decided in
+  step 1.3 (mapping back from the working range) and step 1.8 (run record).
+  Proposal: the run record states them, and the program prints a warning
+  when the count is not zero.
+- **Step 1.3 (pre-processing) is next:** region of interest, mapping to the
+  working range and back, NaN handling, the count of voxels at the limits of
+  the 16-bit range (section 8.6), and the measurement of brightness drift
+  from the rod centre to the rim.

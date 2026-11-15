@@ -1,0 +1,17 @@
+{volume1}
+[representation]
+size = 64 64 64
+bitsperelement = 16
+datatype = unsigned integer
+datarange = 0 65535
+[file1]
+FileFormat = raw
+Size = 64 64 64
+Name = Sample1_18p15_5mu_c64_ref_s17.vol
+bitsperelement = 16
+datatype = unsigned integer
+datarange = 0 65535
+{volumeprimitive9}
+[geometry]
+resolution = 0.005000 0.005000 0.005000
+unit = mm

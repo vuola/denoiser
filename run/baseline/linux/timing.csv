@@ -1,0 +1,13 @@
+volume,program,sigma,best_seconds,all_seconds,peak_mb
+Sample1_18p15_5mu_c64,original,10,7.62242,7.6 7.6 7.6,3908.29
+Sample1_18p15_5mu_c64,original one worker,10,27.1334,27.1 27.1 27.1,324.168
+Sample1_18p15_5mu_c64,brute force,10,11.0194,11.0 11.2 11.2,26.3438
+Sample1_18p15_5mu_c64,original,17,8.64869,8.6 8.7 8.7,3908.17
+Sample1_18p15_5mu_c64,original one worker,17,31.1495,32.1 32.1 31.1,324.168
+Sample1_18p15_5mu_c64,brute force,17,32.4781,32.5 32.6 32.7,26.3438
+Sample2_5mu_c64,original,10,7.64734,7.7 7.6 7.7,3908.27
+Sample2_5mu_c64,original one worker,10,28.1348,28.1 28.1 28.1,324.168
+Sample2_5mu_c64,brute force,10,11.0084,11.0 11.2 11.2,26.3438
+Sample2_5mu_c64,original,17,8.63156,8.6 8.6 8.7,3908.29
+Sample2_5mu_c64,original one worker,17,31.1347,31.1 31.1 31.1,324.168
+Sample2_5mu_c64,brute force,17,32.1371,32.1 32.4 32.5,26.3438

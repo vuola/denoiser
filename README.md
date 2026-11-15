@@ -14,6 +14,7 @@ completed.
 | 4 | Step 0.2: the original filter as reference program | Done, committed |
 | 5 | Research objectives and the requirements they set | Reviewed and approved |
 | 6 | Step 0.3: phantom, scoring and the brute-force filter | Done, committed |
+| 7 | Step 0.4: baseline (run time, memory, accuracy, phantom scores) | Done, committed |
 
 ---
 
@@ -87,11 +88,13 @@ denoiser/
   tests/           unit tests, regression tests, cross-platform comparison tool
   tests/reference/ scripts that run the original filter and compare volumes
   tests/phantom/   scripts that make the synthetic rod phantom and score results against it
-  tests/data/      64³ test scans cut from the CT scans (tracked) and the script that cuts them
-  run/             benchmark scripts and their results, figures
+  tests/data/      64³ test scans cut from the CT scans (tracked), the script that cuts them,
+                   and the original program's results for them (original_outputs/)
+  run/             benchmark scripts and their results (run/baseline/), figures
   latex/           phase reports (.tex) and their figures
   third_party/     vendored dependencies (test framework, header-only readers)
-  data/            full CT scans and historical tools (local only; data/README.txt is tracked)
+  data/            full CT scans, larger crops (data/crops/) and historical tools
+                   (local only; data/README.txt is tracked)
   ORIGINAL_CODE/   untouched reference material (local only, not in git)
 ```
 
@@ -1059,3 +1062,279 @@ clone, which the original program could not.
 - **The Python scripts are for phantoms only.** Generating and scoring the
   fine phantom take a few seconds each, but both hold the volume in memory, so
   they do not suit full scans.
+
+---
+
+## 7. Step 0.4 — Baseline
+
+Status: **done, committed.**
+
+This step records the numbers that later steps are compared with: how fast
+the original program is, how much memory it takes, how far it is from the
+brute-force reference, and how well it and the simple z filters score on the
+phantoms. Three results matter beyond the bookkeeping, and they are stated
+first.
+
+### 7.1 Main results
+
+1. **The original program's error grows with the block size.** Against the
+   brute-force filter it is off by up to 2.7 (on the 0–255 scale) in a 64³
+   volume, 7.5 in a 128³ volume and 17.6 in a 232³ volume, at sigma 10. The
+   program filters real scans in blocks of 256³, so this is its working
+   condition. At sigma 17, the value used on the real samples, the error is
+   much smaller: up to 1.4, with an RMS of 0.04 (section 7.4).
+2. **A plain mean along z classifies the fine phantom as well as the original
+   filter.** A window of 17 slices leaves 0.98 % of the voxels wrong, the
+   original filter at its best sigma 1.09 %. The original filter gives the
+   lower noise (40.8 dB against 38.2 dB). The phantom favours the z filters,
+   so this is a lead to follow, not a verdict (section 7.5).
+3. **The original filter's quality depends sharply on sigma.** It is best at
+   sigma 16–17 for a true noise sigma of 14, and it collapses when sigma is
+   set to twice the true value (section 7.5).
+
+### 7.2 What was added
+
+| File | Purpose |
+|---|---|
+| `run/baseline.py` | Runs the whole baseline and writes the result tables |
+| `run/baseline/windows/`, `run/baseline/linux/` | The result tables of the two machines: `timing.csv`, `scores.csv`, `accuracy.csv` |
+| `tests/phantom/z_filter.py` | Median or mean filter along z, the kind of filter used on the rods earlier (section 5.5) |
+| `tests/data/original_outputs/` | Results of the original program (one worker) for the two tracked test scans at sigma 10 and 17: four `.vol` + `.vgi` pairs, 0.5 MB each |
+| `tests/reference/run_reference.py` | Now also reports the peak memory of the program it runs (measured on Linux only) |
+| `tests/data/make_crops.py` | New options `--centre`, `--scan` and `--out`, for cutting larger local crops |
+
+```
+make reference bruteforce
+python run/baseline.py                          everything
+python run/baseline.py --parts timing accuracy --sizes 64
+```
+
+Larger crops for the accuracy part are local only (`data/crops/`, not
+tracked). They are cut from the middle of scan `Sample2_5mu` with:
+
+```
+python tests/data/make_crops.py --scan Sample2_5mu --size 128 --centre --out data/crops
+python tests/data/make_crops.py --scan Sample2_5mu --size 232 --centre --out data/crops
+```
+
+The 232³ crop is the largest that the original program filters as one block
+(232 voxels plus a border of 12 on each side at sigma 17 make 256). It also serves for
+looking at results by eye. The full baseline took about 2.5 hours on the
+second machine, nearly all of it for the 232³ crop; on the development
+machine only the timing and the 64³ accuracy were run.
+
+### 7.3 Run time and memory
+
+64³ test scans, best of three runs. The two scans give the same times within
+a few per cent; the table shows `Sample1_18p15_5mu_c64`.
+
+| Program | Sigma | Development machine | Second machine | Peak memory (second machine) |
+|---|---|---|---|---|
+| Original, all workers | 10 | 13.8 s | 7.6 s | 3 908 MB |
+| Original, all workers | 17 | 12.6 s | 8.6 s | 3 908 MB |
+| Original, one worker | 10 | 26.4 s | 27.1 s | 324 MB |
+| Original, one worker | 17 | 31.4 s | 31.1 s | 324 MB |
+| Brute force | 10 | 29.7 s | 11.0 s | 26 MB |
+| Brute force | 17 | 75.1 s | 32.5 s | 26 MB |
+
+Larger volumes, second machine, one run each:
+
+| Volume | Sigma | Original, one worker | Brute force (all cores) |
+|---|---|---|---|
+| 64³ | 10 | 28 s | 11 s |
+| 64³ | 17 | 32 s | 32 s |
+| 128³ | 10 | 232 s | 90 s |
+| 128³ | 17 | 233 s | 258 s |
+| 232³ | 10 | 1 288 s | 541 s |
+| 232³ | 17 | 1 232 s | 2 949 s |
+
+What the numbers say:
+
+- **Memory is the original program's weak point.** It takes 3.9 GB to filter
+  a 0.5 MB volume, about 324 MB for every worker, whatever the volume size.
+  The brute-force filter needs 26 MB for the same job. Step 1.7 (smaller
+  per-thread storage) starts from here.
+- **The original program's run time grows in proportion to the voxel count**,
+  about 105 s per million voxels with one worker and about 29 s per million
+  voxels with all workers on the second machine. It does not depend on the
+  patch size. For a present scan (1142 × 1142 × 1000 voxels) this projects to
+  roughly 10 hours, in line with the 14 hours the author reported, and to
+  roughly 30 hours for the planned 2000 × 2000 × 975 scan. These are the
+  figures the optimisation of step 1.7 and the GPU version of phase 5 are
+  measured against.
+- **The brute-force filter is usable as a reference up to about 128³.** Its
+  run time grows with the patch size, so sigma 17 costs three times as much
+  as sigma 10. The 64³ test scans take 11–32 s on the second machine and
+  30–75 s on the development machine, which is acceptable for a check that is
+  run once per step. The 232³ run at sigma 17 took 49 minutes.
+
+### 7.4 Accuracy of the original program
+
+Original program (one worker) against the brute-force filter on the same
+volume. Float results are on the 0–255 scale; one unit is 257 counts.
+
+| Volume | Sigma | Largest difference | RMS difference | Largest, in counts | RMS, in counts | Voxels that differ in the 16-bit result |
+|---|---|---|---|---|---|---|
+| `Sample1_18p15_5mu_c64` | 10 | 5.29 | 0.088 | 1 359 | 22.5 | 52 % |
+| `Sample1_18p15_5mu_c64` | 17 | 1.08 | 0.022 | 276 | 5.6 | 64 % |
+| `Sample2_5mu_c64` | 10 | 2.74 | 0.049 | 705 | 12.5 | 68 % |
+| `Sample2_5mu_c64` | 17 | 0.24 | 0.003 | 63 | 0.9 | 31 % |
+| `Sample2_5mu_c128` | 10 | 7.53 | 0.148 | 1 936 | 38.1 | 89 % |
+| `Sample2_5mu_c128` | 17 | 0.39 | 0.008 | 100 | 2.0 | 49 % |
+| `Sample2_5mu_c232` | 10 | 17.64 | 0.480 | 4 533 | 123.3 | 97 % |
+| `Sample2_5mu_c232` | 17 | 1.43 | 0.036 | 367 | 9.2 | 71 % |
+
+The 64³ rows are identical on both machines, digit for digit. The brute-force
+results for the 64³ scans are identical bit for bit on both machines, and so
+are the original program's one-worker results.
+
+What the numbers say:
+
+- **The error grows with the block size.** This fits the cause found in step
+  0.3: the running sums are kept in 32-bit floats, and the larger the block,
+  the larger the sums and the coarser their last digit. From 64³ to 232³ the
+  RMS difference grows tenfold.
+- **Small sigma suffers most.** The filter compares each patch distance with
+  a threshold that grows with sigma² and with the patch size (5 400 at sigma
+  10, 72 250 at sigma 17). The same rounding error in the distance is a much
+  larger share of the smaller threshold.
+- **At the setting used on the real samples the error is small.** Sigma 17
+  with 256³ blocks gives an RMS difference of about 0.04 on the 0–255 scale,
+  against a noise sigma of 17. Earlier results made at sigma 17 are therefore
+  not called into question. A run at sigma 15 or below would be: there the
+  largest errors reach 7 % of the full scale.
+- **For the tolerance of phase 1** this confirms the decision of section 6.5.
+  New code is compared with the brute-force filter; the table above is the
+  stated and explained distance of the original program from it.
+
+### 7.5 Phantom scores
+
+Scores as defined in section 6.3. The phantoms have a true noise sigma of 14.
+Results of the second machine; the original program ran with all workers.
+
+**Fine phantom** (20-voxel fibres, as in the coming 1 µm scans):
+
+| Filter | Setting | PSNR | `wrong_all` | `wrong_interior` | `wrong_edge` | `void_contrast` |
+|---|---|---|---|---|---|---|
+| None | | 25.2 dB | 12.05 % | 10.19 % | 25.6 % | 0.98 |
+| Original | sigma 8 | 30.0 dB | 3.60 % | 0.53 % | 26.0 % | −0.35 |
+| Original | sigma 10 | 31.5 dB | 2.77 % | 0.29 % | 20.9 % | −0.30 |
+| Original | sigma 12 | 34.6 dB | 1.85 % | 0.10 % | 14.7 % | −0.15 |
+| Original | sigma 14 | 38.1 dB | 1.47 % | 0.06 % | 11.8 % | 0.07 |
+| Original | sigma 15 | 39.3 dB | 1.41 % | 0.05 % | 11.3 % | 0.16 |
+| Original | **sigma 16** | **40.8 dB** | 1.09 % | 0.05 % | 8.7 % | 0.10 |
+| Original | sigma 17 | 39.9 dB | 1.16 % | 0.05 % | 9.3 % | 0.25 |
+| Original | sigma 20 | 36.2 dB | 1.51 % | 0.06 % | 12.1 % | 0.22 |
+| Original | sigma 25 | 34.3 dB | 2.36 % | 0.22 % | 18.0 % | 0.01 |
+| Original | sigma 30 | 26.8 dB | 8.61 % | 3.65 % | 44.8 % | −0.05 |
+| Original | sigma 35 | 21.4 dB | 36.06 % | 33.83 % | 52.3 % | −0.48 |
+| Median along z | radius 1 | 28.7 dB | 4.50 % | 2.72 % | 17.5 % | 0.87 |
+| Median along z | radius 2 | 30.6 dB | 2.58 % | 0.98 % | 14.3 % | 0.77 |
+| Median along z | radius 4 | 32.8 dB | 1.55 % | 0.21 % | 11.4 % | 0.50 |
+| Median along z | radius 8 | 35.2 dB | 1.18 % | 0.07 % | 9.3 % | 0.19 |
+| Median along z | radius 16 | 36.8 dB | 1.19 % | 0.06 % | 9.4 % | 0.06 |
+| Median along z | radius 32 | 35.5 dB | 2.05 % | 0.18 % | 15.7 % | −0.02 |
+| Mean along z | radius 1 | 29.9 dB | 3.05 % | 1.39 % | 15.2 % | 0.81 |
+| Mean along z | radius 2 | 32.1 dB | 1.75 % | 0.33 % | 12.1 % | 0.69 |
+| Mean along z | radius 4 | 34.6 dB | 1.20 % | 0.07 % | 9.5 % | 0.48 |
+| Mean along z | **radius 8** | 37.0 dB | **0.98 %** | 0.06 % | 7.7 % | 0.26 |
+| Mean along z | radius 16 | 38.2 dB | 1.04 % | 0.06 % | 8.2 % | 0.11 |
+| Mean along z | radius 32 | 35.6 dB | 1.99 % | 0.17 % | 15.3 % | 0.02 |
+
+The original filter took 45 s per run on this phantom (204 s at sigma 35,
+which uses the larger search window), the z filters 1–7 s as Python scripts.
+
+**Coarse phantom** (4-voxel fibres, as in the present 5 µm scans), the best
+setting of each filter and the settings next to it:
+
+| Filter | Setting | PSNR | `wrong_all` | `wrong_interior` | `wrong_edge` | `void_contrast` |
+|---|---|---|---|---|---|---|
+| None | | 25.2 dB | 18.1 % | 8.22 % | 26.2 % | 1.04 |
+| Original | sigma 14 | 31.8 dB | 8.5 % | 0.17 % | 15.2 % | −0.57 |
+| Original | **sigma 16** | 33.1 dB | 6.9 % | 0.07 % | 12.5 % | −0.31 |
+| Original | sigma 17 | 32.0 dB | 7.5 % | 0.09 % | 13.5 % | −0.23 |
+| Original | sigma 25 | 24.0 dB | 36.8 % | 17.6 % | 52.4 % | −0.67 |
+| Median along z | radius 4 | 32.4 dB | 6.7 % | 0.16 % | 12.0 % | −0.02 |
+| Median along z | radius 8 | 33.3 dB | 6.4 % | 0.06 % | 11.5 % | −0.21 |
+| Mean along z | radius 4 | 34.2 dB | 5.4 % | 0.05 % | 9.8 % | 0.13 |
+| Mean along z | **radius 8** | **34.4 dB** | **5.4 %** | 0.03 % | 9.8 % | −0.10 |
+| Mean along z | radius 16 | 30.4 dB | 10.5 % | 0.75 % | 18.4 % | −0.26 |
+
+All rows are in `run/baseline/linux/scores.csv`.
+
+What the numbers say:
+
+- **Sigma is not a safe dial on the original filter.** The best result comes
+  at sigma 16, the first value that uses the larger patch (radius 2), not at
+  the true sigma of 14. Above sigma 20 the result gets worse quickly, and at
+  about twice the true sigma the filter treats all patches as alike and
+  becomes a plain average over the whole search window: on the fine phantom
+  36 % of the voxels are then wrong, three times as many as without any
+  filter. The value 17 used on the real samples is close to the best one,
+  provided the noise there is near 14–15 on the 0–255 scale. Step 1.4 (noise
+  estimate) therefore matters more than it looked, and step 1.5 should
+  separate the choice of patch size from sigma.
+- **Averaging along the fibres works.** With a window of 9–33 slices the mean
+  along z classifies as well as the original filter or slightly better, on
+  both phantoms, at a tiny fraction of the cost. The mean does better than
+  the median throughout. This supports requirement R5 (separate radii for x,
+  y and z): a Non-Local Means filter that searches further along z than
+  across should combine the strengths of both.
+- **The window along z has an upper limit set by the twist.** Radius 32 on
+  the fine phantom and radius 16 on the coarse one are clearly worse, because
+  over that length the fibres have moved sideways by a good part of their
+  diameter. The median with radius 16 that was used earlier at 5 µm is, by
+  this measure, already past the best window (radius 8).
+- **All good settings remove the voids.** Every filter that gets
+  `wrong_all` near its minimum leaves less than 30 % of the void contrast.
+  Short z windows keep the voids (radius 1–2: 70–87 %) but classify poorly.
+  This confirms again that bubbles are searched in the raw data (section
+  5.2).
+- **At 5 µm no filter separates the materials well.** The best result on the
+  coarse phantom leaves 5.4 % of the voxels wrong, nearly all of them edge
+  voxels, which at four voxels per fibre are a large share of the volume.
+
+How far these conclusions carry: the phantom favours the z filters. Its
+noise is independent from voxel to voxel, while CT noise is correlated
+between neighbours; its fibres are perfectly regular with one common twist;
+and the fine phantom is only 96 slices deep, so the widest windows are cut
+short at both ends. The comparison has to be repeated on real data when the
+classification of phase 4 gives a way to judge it.
+
+### 7.6 Stored outputs of the original program
+
+`tests/data/original_outputs/` holds the one-worker results of the original
+program for the two tracked test scans, at sigma 10 and sigma 17. They are
+identical on both machines (same checksums). Since `ORIGINAL_CODE/` is not in
+git, these files are what a fresh clone has of the original program's
+behaviour. They are for stating how far new code is from the original, with
+`tests/reference/compare_volumes.py`; the pass/fail reference is the
+brute-force filter (section 6.5).
+
+### 7.7 Results on both platforms
+
+| Check | Development machine | Second machine |
+|---|---|---|
+| `make test` | 10 test cases, 772 checks, all pass | the same |
+| Timing, 64³ test scans | measured | measured, with peak memory |
+| Accuracy, 64³ test scans | measured | identical values |
+| Accuracy, 128³ and 232³ crops | not run | measured |
+| Phantom scores | not run | measured |
+| Original program's one-worker outputs | stored in `tests/data/original_outputs/` | identical checksums |
+
+### 7.8 Open points
+
+- **Phase 0 is complete with this step.** Decided in review: no separate
+  report for phase 0; its results go into the phase 1 report.
+- **Per-axis radii come late in the plan.** Result 2 suggests that searching
+  further along z is the most promising change to the filter itself. It is
+  step 1.5 in the plan. It could be tried earlier, with the brute-force
+  filter, which already takes separate radii for x, y and z, on the phantoms
+  only. Proposal: do this as a short experiment at the start of step 1.5,
+  not before, so that the reader and writer of steps 1.1–1.2 come first as
+  planned.
+- **The baseline is not part of `make test`.** It takes hours and is run by
+  hand when a step calls for it.
+- **The z filters are Python scripts for phantoms and small crops.** If a
+  mean along z is to be used on full scans, it is added to the C++ program
+  in phase 1.

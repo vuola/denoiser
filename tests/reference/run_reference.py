@@ -136,6 +136,20 @@ def to_counts(work_values):
     return counts, limited
 
 
+def run_and_measure(command):
+    """Run a program, discarding its standard output.
+
+    Returns (exit code, peak memory in MB). The peak memory (largest resident
+    set size of the process) is measured on Linux; elsewhere it is None.
+    """
+    process = subprocess.Popen(command, stdout=subprocess.DEVNULL)
+    if sys.platform.startswith("linux"):
+        _, status, usage = os.wait4(process.pid, 0)
+        process.returncode = os.waitstatus_to_exitcode(status)
+        return process.returncode, usage.ru_maxrss / 1024.0   # ru_maxrss is in kB on Linux
+    return process.wait(), None
+
+
 def run_reference(scan_dir, sigma, out_dir, program, keep_float, tag="ref"):
     """Filter the scan in scan_dir with the original program.
 
@@ -148,8 +162,9 @@ def run_reference(scan_dir, sigma, out_dir, program, keep_float, tag="ref"):
         tag         short text in the output name: <scan>_<tag>_s<sigma>
 
     Returns a dict with the result .vol path ("vol"), the run time of the
-    program in seconds ("seconds"), the volume size ("size") and the number of
-    result values outside 0...65535 ("limited").
+    program in seconds ("seconds"), its peak memory in MB ("peak_mb", None
+    except on Linux), the volume size ("size") and the number of result values
+    outside 0...65535 ("limited").
     Raises ValueError on bad input and RuntimeError if the program fails.
     """
     if not os.path.isfile(program):
@@ -179,11 +194,10 @@ def run_reference(scan_dir, sigma, out_dir, program, keep_float, tag="ref"):
         write_big_endian_floats(float_in, work)
 
         start = time.perf_counter()
-        done = subprocess.run([program, float_in, float_out, f"{sigma:g}"],
-                              stdout=subprocess.DEVNULL)
+        returncode, peak_mb = run_and_measure([program, float_in, float_out, f"{sigma:g}"])
         seconds = time.perf_counter() - start
-        if done.returncode != 0:
-            raise RuntimeError(f"reference program failed with exit code {done.returncode}")
+        if returncode != 0:
+            raise RuntimeError(f"reference program failed with exit code {returncode}")
 
         result = read_big_endian_floats(float_out, voxel_count)
     finally:
@@ -205,8 +219,8 @@ def run_reference(scan_dir, sigma, out_dir, program, keep_float, tag="ref"):
         with open(os.path.join(out_dir, name + ".f32"), "wb") as raw:
             result.tofile(raw)
 
-    return {"vol": out_vol, "seconds": seconds, "size": (width, height, depth),
-            "limited": limited}
+    return {"vol": out_vol, "seconds": seconds, "peak_mb": peak_mb,
+            "size": (width, height, depth), "limited": limited}
 
 
 def main():
@@ -240,8 +254,9 @@ def main():
         return 1
 
     width, height, depth = result["size"]
+    memory = f", peak memory {result['peak_mb']:.0f} MB" if result["peak_mb"] else ""
     print(f"{os.path.relpath(result['vol'])}: {width}x{height}x{depth}, "
-          f"sigma {args.sigma:g}, {result['seconds']:.1f} s, "
+          f"sigma {args.sigma:g}, {result['seconds']:.1f} s{memory}, "
           f"{result['limited']} values outside 0...65535")
     return 0
 

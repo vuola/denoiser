@@ -20,6 +20,11 @@ manual workflow cut from these scans.
 Usage (from the repository root):
     python tests/data/make_crops.py
     python tests/data/make_crops.py --origin 100 100 100 --size 32
+    python tests/data/make_crops.py --scan Sample2_5mu --size 232 --centre --out data/crops
+
+With --out the crops go to another folder; data/crops/ is not tracked and is
+the place for crops too large for git. --centre puts the cube in the middle of
+the scan, --scan limits the run to one scan folder.
 
 Needs only the Python standard library.
 """
@@ -157,16 +162,29 @@ def main():
     parser.add_argument("--origin", type=int, nargs=3, default=DEFAULT_ORIGIN,
                         metavar=("X", "Y", "Z"), help="first voxel of the cube, zero-based")
     parser.add_argument("--size", type=int, default=DEFAULT_SIZE, help="cube edge in voxels")
+    parser.add_argument("--centre", action="store_true",
+                        help="put the cube in the middle of the scan instead of at --origin")
+    parser.add_argument("--scan", help="name of one scan folder in --src (default: all)")
+    parser.add_argument("--out", default=here,
+                        help="folder for the crops (default: this script's folder)")
     args = parser.parse_args()
 
-    scans = sorted(d for d in glob.glob(os.path.join(args.src, "*")) if os.path.isdir(d))
+    scans = sorted(d for d in glob.glob(os.path.join(args.src, args.scan or "*"))
+                   if os.path.isdir(d))
     if not scans:
         print(f"No scan folders in {args.src}", file=sys.stderr)
         return 1
 
     for scan_dir in scans:
         try:
-            dst_dir = crop_scan(scan_dir, here, tuple(args.origin), args.size)
+            origin = tuple(args.origin)
+            if args.centre:
+                vgi_files = glob.glob(os.path.join(scan_dir, "*.vgi"))
+                if len(vgi_files) != 1:
+                    raise ValueError(f"{scan_dir}: expected one .vgi file, found {len(vgi_files)}")
+                origin = tuple((n - args.size) // 2 for n in read_vgi(vgi_files[0])["size"])
+            os.makedirs(args.out, exist_ok=True)
+            dst_dir = crop_scan(scan_dir, args.out, origin, args.size)
         except ValueError as error:
             print(f"Failed: {error}", file=sys.stderr)
             return 1

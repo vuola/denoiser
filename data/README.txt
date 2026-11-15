@@ -28,6 +28,15 @@ zero-based. They are regenerated from RAW/ with:
 
   python tests/data/make_crops.py
 
+crops/  -  larger crops for accuracy checks and for looking at results
+----------------------------------------------------------------------
+Cubes of 128 and 232 voxels from the middle of Sample2_5mu, in the same
+format as the test scans (4 MB and 25 MB, not tracked). Used by
+run/baseline.py if present. They are regenerated from RAW/ with:
+
+  python tests/data/make_crops.py --scan Sample2_5mu --size 128 --centre --out data/crops
+  python tests/data/make_crops.py --scan Sample2_5mu --size 232 --centre --out data/crops
+
 Historical material (kept for reference, not used by the pipeline)
 -------------------------------------------------------------------
 macros/   ImageJ macros of the old manual workflow (PickCube.ijm etc.)

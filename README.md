@@ -15,6 +15,7 @@ completed.
 | 5 | Research objectives and the requirements they set | Reviewed and approved |
 | 6 | Step 0.3: phantom, scoring and the brute-force filter | Done, committed |
 | 7 | Step 0.4: baseline (run time, memory, accuracy, phantom scores) | Done, committed |
+| 8 | Step 1.1: scan reader and the command `denoiser info` | Done, committed |
 
 ---
 
@@ -1338,3 +1339,151 @@ brute-force filter (section 6.5).
 - **The z filters are Python scripts for phantoms and small crops.** If a
   mean along z is to be used on full scans, it is added to the C++ program
   in phase 1.
+
+---
+
+## 8. Step 1.1 — Scan reader
+
+Status: **done, committed.**
+
+The program can now read a scan as the CT lab delivers it, without ImageJ
+and without a converted copy. `denoiser info` is the first working command.
+
+### 8.1 What was added
+
+| File | Purpose |
+|---|---|
+| `include/scan_reader.hpp`, `src/scan_reader.cpp` | The scan reader |
+| `include/volume.hpp` | Volume size and region, shared by all parts (the size was in `nlm_bruteforce.hpp` before) |
+| `src/main.cpp` | The command `denoiser info` |
+| `tests/test_scan_reader.cpp` | 10 test cases for the reader |
+
+The program version is now 1.1.0, after the step it implements.
+
+### 8.2 The command
+
+```
+denoiser info data/RAW/Sample2_5mu
+```
+
+```
+Voxel file:   data/RAW/Sample2_5mu/Sample2_5mu_.vol
+Size:         1142 x 1142 x 1000 voxels (1304164000)
+Sample type:  16-bit unsigned integer, little-endian
+Header:       0 bytes
+Voxel size:   0.005 x 0.005 x 0.005 mm
+File size:    2608328000 bytes, as expected
+Minimum:      0
+Maximum:      65535
+Mean:         28235.24
+Std. dev.:    4213.6733
+```
+
+This takes 8 seconds for the 2.6 GB scan on the development machine. The
+scan may be given as its folder, its `.vgi` file or its `.vol` file.
+
+A raw file that has no `.vgi` file is described by hand, for example one of
+the float files of the old workflow:
+
+```
+denoiser info SampleB_BE255_250x250x250.raw --raw 250 250 250 --type f32 --big-endian
+```
+
+| Option | Meaning |
+|---|---|
+| `--raw W H D` | Volume size in voxels; marks the file as described by hand |
+| `--type T` | `u8`, `u16` (default) or `f32` |
+| `--big-endian` | Samples are stored highest byte first (default: lowest first) |
+| `--header N` | Bytes to skip before the first voxel (default 0) |
+
+Exit codes: 0 success, 1 wrong command line, 3 the scan cannot be read. The
+message names the file and the reason, for example:
+
+```
+denoiser info: scan.vol: the file has 524288 bytes, but 64 x 64 x 63 voxels
+of type 16-bit unsigned integer with a header of 0 bytes need 516096
+```
+
+### 8.3 The reader
+
+All functions are documented in `include/scan_reader.hpp`.
+
+| Function | What it does |
+|---|---|
+| `openScan(path)` | Finds the `.vgi` file, reads the description and checks the voxel file's size |
+| `parseVgi(text, name)` | Reads the description from the text of a `.vgi` file |
+| `describeRaw(path, size, type, byte order, header)` | The same description given by hand |
+| `checkScan(info)` | Checks that the file has exactly header + voxels × bytes per voxel |
+| `readRegion(info, region)` | Reads a box of voxels; only those voxels are read from the file |
+| `readVolume(info)` | Reads all voxels; for small volumes |
+| `scanStatistics(info)` | Minimum, maximum, mean and standard deviation, read slice by slice |
+
+How it behaves:
+
+- **What is taken from the `.vgi` file:** `size`, `bitsperelement`,
+  `datatype`, `resolution` and `unit`, and `skipheader` if present. Keys are
+  matched without regard to case, and the first occurrence counts, as in the
+  Python scripts of phase 0.
+- **The voxel file is found by name, not from the `.vgi` text.** It is the
+  `.vgi` file's name with the extension `.vol`. The lab's `.vgi` files hold
+  a path of the lab's own computer, which is of no use here.
+- **Byte order.** The `.vgi` format does not state it; little-endian is
+  assumed, as verified in section 2.3. Files described by hand can be
+  big-endian.
+- **Sample types:** 8-bit and 16-bit unsigned integers and 32-bit floats.
+  Anything else is refused with a message that lists these.
+- **Values are returned unchanged,** as 32-bit floats: a count of 31139
+  becomes 31139.0. Mapping to the working range 0–255 is step 1.3.
+- **Regions are zero-based** and must lie inside the volume; a region that
+  does not fit is an error, not silently cut.
+- **Large files work.** Positions are 64-bit throughout; reading single
+  voxels at the end of the 2.6 GB scan gives the same values as an
+  independent Python check.
+- **Errors** are reported by exception with the file name in the message;
+  the command line turns them into the messages above.
+
+### 8.4 Tests
+
+| Test case | Checks |
+|---|---|
+| `.vgi` text of a lab scan | Windows line ends, indented keys, a second `Size` further down, a lab path in `Name` |
+| Sample types and optional keys | 8-bit, float, header, missing voxel size |
+| Unreadable `.vgi` text | 11 kinds of faulty text are refused; the message names the file |
+| Opening a scan | From the folder, the `.vgi` file and the `.vol` file |
+| Missing and mismatching files | No folder, no `.vgi`, two `.vgi` files, no `.vol`, a `.vol` one byte short |
+| Region content | Every voxel of a region, for 16-bit in both byte orders (one with a header), 8-bit, and float in both byte orders |
+| Region limits | Full-width regions, the last voxel alone, five regions that do not fit |
+| Description by hand | Wrong size, wrong header, missing file |
+| Statistics | Known values; NaN and infinity counted and left out |
+| Tracked test scans | Sum, minimum, maximum and three voxels of each scan against values computed independently in Python |
+
+### 8.5 Results on both platforms
+
+| Check | Development machine | Second machine |
+|---|---|---|
+| `make test` | 20 test cases, 902 checks, all pass | the same |
+| `make test SANITIZE=1` | not available | all pass, no sanitizer report |
+| Compiler warnings | none | none |
+| `denoiser info` on a tracked test scan | | same figures as on the development machine |
+| `denoiser info` on the full scans (2.6 GB) | 8 s each | not run (the full scans are on the development machine only) |
+
+Statistics of the full scans, in counts:
+
+| Scan | Minimum | Maximum | Mean | Standard deviation |
+|---|---|---|---|---|
+| `Sample1_18p15_5mu` | 0 | 65535 | 33 403 | 5 041 |
+| `Sample2_5mu` | 0 | 65535 | 28 235 | 4 214 |
+
+### 8.6 Open points
+
+- **Both full scans reach 0 and 65535.** Some voxels are therefore at the
+  limits of the 16-bit range, where the true value may have been cut off in
+  the reconstruction. The 64³ test scans do not contain such voxels. How
+  many there are and where they lie (inside the rod, or only in the air and
+  the holder around it) is counted in step 1.3, because it bears on
+  requirement R2 (nothing is clipped).
+- **The reader returns floats.** A block of voxels takes four bytes per
+  voxel in memory although the file has two. This is what the filter works
+  with anyway; step 1.7 decides whether blocks are converted on the fly.
+- **Step 1.2 (writer) is next.** It writes `.vol` plus `.vgi` in the input's
+  sample type and uses the description of this step.

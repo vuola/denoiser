@@ -16,15 +16,9 @@
 
 #include <vector>
 
-namespace denoiser {
+#include "volume.hpp"
 
-/// Size of a volume in voxels. Voxel (x, y, z) is stored at index
-/// (z * height + y) * width + x, that is, x runs fastest.
-struct VolumeSize {
-    int width = 0;   ///< number of voxels along x
-    int height = 0;  ///< number of voxels along y
-    int depth = 0;   ///< number of voxels along z
-};
+namespace denoiser {
 
 /// Settings of the filter. Radii are in voxels and given per axis in the
 /// order x, y, z; radius r means 2r + 1 voxels along that axis.

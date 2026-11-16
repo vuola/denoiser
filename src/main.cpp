@@ -4,9 +4,12 @@
 // Licensed under the GNU General Public License v3; see LICENSE.
 //
 // Command-line entry point. The commands "info" (step 1.1), "crop" and
-// "profile" (step 1.3) are implemented; "noise" and "run" are recognised and
-// follow in later steps of phase 1 (README sections 1.6 and 2.4).
+// "profile" (step 1.3) and "noise" (step 1.4) are implemented; "run" is
+// recognised and follows in a later step of phase 1 (README sections 1.6
+// and 2.4).
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -18,6 +21,7 @@
 #include <string>
 #include <vector>
 
+#include "noise_estimate.hpp"
 #include "preprocess.hpp"
 #include "radial_profile.hpp"
 #include "scan_reader.hpp"
@@ -33,6 +37,11 @@ enum ExitCode {
     kFailed = 3,          ///< The command was understood but could not be carried out.
 };
 
+/// Distance in z, in voxels, of the differences that give the sigma for
+/// scans whose neighbouring voxels have correlated noise. At this distance
+/// the correlation has died out in the scans examined (README chapter 11).
+const int kSigmaDistance = 4;
+
 /**
  * @brief Print the command summary.
  * @param out Stream to print to.
@@ -45,7 +54,7 @@ void print_usage(std::ostream& out) {
            "  denoiser info    <scan>                    show what the scan contains\n"
            "  denoiser crop    <scan> <region> --out DIR write a region as a scan of its own\n"
            "  denoiser profile <scan> [options]          brightness against distance from the axis\n"
-           "  denoiser noise   <scan>                    estimate the noise sigma\n"
+           "  denoiser noise   <scan> [options]          estimate the noise sigma\n"
            "  denoiser run     <scan> [options]          denoise the scan\n"
            "  denoiser --version\n"
            "  denoiser --help\n"
@@ -69,7 +78,16 @@ void print_usage(std::ostream& out) {
            "  --slices Z0 N      use N slices from slice Z0 (default: all)\n"
            "  --out FILE         write the table to FILE instead of the screen\n"
            "\n"
-           "The commands noise and run are not implemented yet.\n";
+           "noise: prints sigma on the working scale 0-255 and in stored units\n"
+           "  --roi ... or --centre-cube N   use a region only (default: whole scan)\n"
+           "  --slices N         number of slices examined (default 20)\n"
+           "  --scale LO HI      stored values mapped to 0 and 255 (default 0 65535;\n"
+           "                     0 255 for 8-bit and float scans)\n"
+           "  --lags N           largest distance in the table of estimates from\n"
+           "                     differences between voxels 1 to N apart (default 6;\n"
+           "                     0 leaves the table out)\n"
+           "\n"
+           "The command run is not implemented yet.\n";
 }
 
 /**
@@ -215,6 +233,62 @@ denoiser::ScanInfo take_scan(std::vector<std::string> words) {
 }
 
 /**
+ * @brief Take the region options out of the command-line words.
+ *
+ * @param words The command-line words; --roi or --centre-cube and their
+ *        values are removed.
+ * @param roi Receives the six values of --roi if it is present.
+ * @param cube Receives the value of --centre-cube if it is present.
+ * @return true if a region was given.
+ * @throws std::invalid_argument if both options are given.
+ */
+bool take_region_options(std::vector<std::string>& words, std::vector<std::string>& roi,
+                         std::vector<std::string>& cube) {
+    const bool has_roi = take_option(words, "--roi", 6, roi);
+    const bool has_cube = take_option(words, "--centre-cube", 1, cube);
+    if (has_roi && has_cube) {
+        throw std::invalid_argument("give the region with either --roi or --centre-cube");
+    }
+    if (!has_roi) {
+        roi.clear();
+    }
+    if (!has_cube) {
+        cube.clear();
+    }
+    return has_roi || has_cube;
+}
+
+/**
+ * @brief Turn the region options into a region of a scan.
+ *
+ * @param roi The six values of --roi, or empty.
+ * @param cube The value of --centre-cube, or empty.
+ * @param size Size of the scan.
+ * @return The region; the whole scan if both are empty.
+ * @throws std::invalid_argument if the region does not fit the scan.
+ */
+denoiser::Region to_region(const std::vector<std::string>& roi,
+                           const std::vector<std::string>& cube,
+                           const denoiser::VolumeSize& size) {
+    if (!cube.empty()) {
+        return denoiser::centredCube(size, to_voxels(cube[0], "the cube size", 1));
+    }
+    if (roi.empty()) {
+        return denoiser::wholeVolume(size);
+    }
+    const denoiser::Region region{to_voxels(roi[0], "X0", 0), to_voxels(roi[1], "Y0", 0),
+                                  to_voxels(roi[2], "Z0", 0), to_voxels(roi[3], "W", 1),
+                                  to_voxels(roi[4], "H", 1),  to_voxels(roi[5], "D", 1)};
+    if (!denoiser::regionFits(region, size)) {
+        throw std::invalid_argument("the region does not fit the scan of " +
+                                    std::to_string(size.width) + " x " +
+                                    std::to_string(size.height) + " x " +
+                                    std::to_string(size.depth) + " voxels");
+    }
+    return region;
+}
+
+/**
  * @brief Print the description of a scan.
  * @param out Stream to print to.
  * @param info The scan description.
@@ -292,30 +366,15 @@ int run_crop(std::vector<std::string> words) {
     std::vector<std::string> roi;
     std::vector<std::string> cube;
     std::vector<std::string> out;
-    const bool has_roi = take_option(words, "--roi", 6, roi);
-    const bool has_cube = take_option(words, "--centre-cube", 1, cube);
+    const bool has_region = take_region_options(words, roi, cube);
     if (!take_option(words, "--out", 1, out)) {
         throw std::invalid_argument("--out DIR is required");
     }
-    if (has_roi == has_cube) {
+    if (!has_region) {
         throw std::invalid_argument("give the region with either --roi or --centre-cube");
     }
     const denoiser::ScanInfo source = take_scan(words);
-
-    denoiser::Region region;
-    if (has_cube) {
-        region = denoiser::centredCube(source.size, to_voxels(cube[0], "the cube size", 1));
-    } else {
-        region = denoiser::Region{to_voxels(roi[0], "X0", 0), to_voxels(roi[1], "Y0", 0),
-                                  to_voxels(roi[2], "Z0", 0), to_voxels(roi[3], "W", 1),
-                                  to_voxels(roi[4], "H", 1),  to_voxels(roi[5], "D", 1)};
-        if (!denoiser::regionFits(region, source.size)) {
-            throw std::invalid_argument("the region does not fit the scan of " +
-                                        std::to_string(source.size.width) + " x " +
-                                        std::to_string(source.size.height) + " x " +
-                                        std::to_string(source.size.depth) + " voxels");
-        }
-    }
+    const denoiser::Region region = to_region(roi, cube, source.size);
 
     namespace fs = std::filesystem;
     const fs::path folder = fs::path(out[0]).lexically_normal();
@@ -415,6 +474,112 @@ int run_profile(std::vector<std::string> words) {
     return kOk;
 }
 
+/**
+ * @brief The command "noise": estimate the noise sigma of a scan.
+ *
+ * Prints the six estimators of noise_estimate.hpp, summarised over the
+ * examined slices, on the working scale 0-255, then the estimate from
+ * differences between voxels 1 to N apart along each axis, and last the
+ * sigma values in working-scale and stored units: the earlier method, z
+ * neighbours, and z differences kSigmaDistance voxels apart. The last one
+ * is the value to use when the noise of neighbouring voxels is correlated
+ * (README chapter 11).
+ *
+ * @param words The command-line words after "noise".
+ * @return kOk.
+ * @throws std::invalid_argument for a wrong command line.
+ * @throws std::runtime_error if the scan cannot be read.
+ */
+int run_noise(std::vector<std::string> words) {
+    std::vector<std::string> roi;
+    std::vector<std::string> cube;
+    std::vector<std::string> slices_words;
+    std::vector<std::string> scale;
+    std::vector<std::string> lags_words;
+    take_region_options(words, roi, cube);
+    const bool has_slices = take_option(words, "--slices", 1, slices_words);
+    const bool has_scale = take_option(words, "--scale", 2, scale);
+    const bool has_lags = take_option(words, "--lags", 1, lags_words);
+    const denoiser::ScanInfo info = take_scan(words);
+    const denoiser::Region region = to_region(roi, cube, info.size);
+
+    const int slices = has_slices ? to_voxels(slices_words[0], "the number of slices", 1) : 20;
+    denoiser::IntensityMap map = denoiser::defaultMap(info.sample_type);
+    if (has_scale) {
+        map.low = to_number<double>(scale[0], "the lower end of the scale");
+        map.high = to_number<double>(scale[1], "the upper end of the scale");
+        denoiser::checkMap(map);
+    }
+    // A difference of one stored unit is this much on the working scale.
+    const double to_work = 255.0 / (map.high - map.low);
+
+    const denoiser::NoiseEstimate estimate = denoiser::estimateNoise(info, region, slices);
+
+    std::cout << "Voxel file:   " << info.volume_path << "\n"
+              << "Region:       first voxel " << region.x0 << " " << region.y0 << " " << region.z0
+              << ", size " << region.width << " x " << region.height << " x " << region.depth
+              << "\n"
+              << "Slices:       " << estimate.slices.size() << ", from " << estimate.slices.front()
+              << " to " << estimate.slices.back() << "\n"
+              << "Scale:        " << map.low << " ... " << map.high << " stored -> 0 ... 255\n\n"
+              << "Estimator      median     mean       Q1       Q3   (working scale)\n";
+    const auto line = [to_work](const char* name, const denoiser::NoiseSummary& s) {
+        std::cout << std::left << std::setw(12) << name << std::right << std::fixed
+                  << std::setprecision(3);
+        if (s.count == 0) {
+            std::cout << "   (needs a next slice)\n";
+            return;
+        }
+        std::cout << std::setw(9) << s.median * to_work << std::setw(9) << s.mean * to_work
+                  << std::setw(9) << s.q1 * to_work << std::setw(9) << s.q3 * to_work << "\n";
+    };
+    line("std_dev", estimate.std_dev);
+    line("mad", estimate.mad);
+    line("diff", estimate.diff);
+    line("resid", estimate.resid);
+    line("zdiff", estimate.zdiff);
+    line("zdiff_robust", estimate.zdiff_robust);
+
+    // Table by distance. The region's depth limits the largest distance.
+    int max_lag = has_lags ? to_voxels(lags_words[0], "the largest distance", 0) : 6;
+    max_lag = std::min(max_lag, region.depth - 1);
+    std::vector<denoiser::LagSigma> lags;
+    if (max_lag >= 1) {
+        lags = denoiser::differenceByLag(info, region, slices, max_lag);
+        std::cout << "\nSigma from differences between voxels a distance apart (working scale)\n"
+                  << "distance        x        y        z\n";
+        const auto cell = [to_work](double value) {
+            if (std::isnan(value)) {
+                std::cout << std::setw(9) << "-";
+            } else {
+                std::cout << std::setw(9) << value * to_work;
+            }
+        };
+        for (const denoiser::LagSigma& l : lags) {
+            std::cout << std::setw(8) << l.lag;
+            cell(l.x);
+            cell(l.y);
+            cell(l.z);
+            std::cout << "\n";
+        }
+    }
+
+    std::cout << "\nSigma, earlier method (diff and resid): " << std::setw(8)
+              << estimate.recommended * to_work << "   (" << estimate.recommended
+              << " stored units)\n";
+    if (estimate.zdiff_robust.count > 0) {
+        std::cout << "Sigma, z neighbours (zdiff_robust):     " << std::setw(8)
+                  << estimate.zdiff_robust.median * to_work << "   ("
+                  << estimate.zdiff_robust.median << " stored units)\n";
+    }
+    if (static_cast<int>(lags.size()) >= kSigmaDistance) {
+        const double sigma = lags[static_cast<std::size_t>(kSigmaDistance - 1)].z;
+        std::cout << "Sigma, z differences " << kSigmaDistance << " apart:           " << std::setw(8)
+                  << sigma * to_work << "   (" << sigma << " stored units)\n";
+    }
+    return kOk;
+}
+
 }  // namespace
 
 /**
@@ -440,7 +605,7 @@ int main(int argc, char* argv[]) {
         std::cout << denoiser::version() << "\n";
         return kOk;
     }
-    if (command == "noise" || command == "run") {
+    if (command == "run") {
         std::cerr << "denoiser: command '" << command << "' is not implemented yet\n";
         return kNotImplemented;
     }
@@ -454,6 +619,9 @@ int main(int argc, char* argv[]) {
         }
         if (command == "profile") {
             return run_profile(words);
+        }
+        if (command == "noise") {
+            return run_noise(words);
         }
     } catch (const std::invalid_argument& error) {
         std::cerr << "denoiser " << command << ": " << error.what() << "\n";

@@ -18,6 +18,7 @@ completed.
 | 8 | Step 1.1: scan reader and the command `denoiser info` | Done, committed |
 | 9 | Step 1.2: scan writer | Done, committed |
 | 10 | Step 1.3: pre-processing, and the brightness drift of the present scans | Done, committed |
+| 11 | Step 1.4: noise estimate, and the noise of the present scans | Done, committed |
 
 ---
 
@@ -1851,3 +1852,307 @@ What the numbers say:
 - **The test scans and crops lie near the axis** (within 165 voxels), where
   the drift is below 2 %. The baseline of step 0.4 is not affected.
 - **Step 1.4 (noise estimate) is next.**
+
+---
+
+## 11. Step 1.4 — Noise estimate
+
+Status: **done, committed.**
+
+The filter needs the noise sigma: it decides the patch size, the search size
+and the smoothing strength. This step adds the command `denoiser noise`. It
+reproduces the estimate of the earlier script `estimate_noise.py` and checks
+that estimate on the phantom and on the full scans. The check changed the
+picture, so the results come first.
+
+### 11.1 Main results
+
+1. **The earlier method is reproduced exactly.** The new command gives the
+   same numbers as the formulas of `estimate_noise.py`, to all printed
+   digits (section 11.6).
+2. **On the present scans the earlier method reads about 20 % low.** It
+   gives 13.2 and 11.0 on the 0–255 scale. The noise is about 16.4 in the
+   first scan and 13.7 in the second.
+3. **The reason: the noise of neighbouring voxels is not independent.**
+   Directly neighbouring voxels share 45 % of their noise, voxels two apart
+   9 %, voxels three apart 1 %. The figures are the same in both scans, so
+   this comes from the reconstruction, not from the samples. Every estimator
+   that compares direct neighbours therefore sees too little noise.
+4. **On the phantom the earlier method reads high.** There the noise is
+   independent, and the method takes fibre edges for noise: 14.9 on the fine
+   phantom and 19.1 on the coarse one, against a true 14.0. On the coarse
+   phantom *without any noise* it still reports 14.5.
+5. **Differences along z, four voxels apart, give the right value in both
+   cases.** The fibres run along z, so the material hardly changes between
+   slices, and at four voxels the noise is independent again. This estimate
+   is 14.1 and 14.6 on the phantoms (true 14.0) and is the 16.4 and 13.7
+   quoted above for the scans.
+6. **The sigma of 17 used on the earlier samples was a good value for the
+   first scan** (4 % above its noise) **and high for the second** (24 %
+   above).
+
+### 11.2 What was added
+
+| File | Purpose |
+|---|---|
+| `include/noise_estimate.hpp`, `src/noise_estimate.cpp` | The estimators, the summary over slices, the table by distance |
+| `src/main.cpp` | Command `denoiser noise`; the region options are now shared by `crop` and `noise` |
+| `tests/test_noise_estimate.cpp` | 9 test cases |
+
+The program version is now 1.4.0.
+
+### 11.3 Command
+
+```
+denoiser noise data/RAW/Sample1_18p15_5mu --roi 196 196 0 750 750 1000
+```
+
+```
+Voxel file:   data/RAW/Sample1_18p15_5mu/Sample1_18p15_5mu_.vol
+Region:       first voxel 196 196 0, size 750 x 750 x 1000
+Slices:       20, from 0 to 999
+Scale:        0 ... 65535 stored -> 0 ... 255
+
+Estimator      median     mean       Q1       Q3   (working scale)
+std_dev        17.976   18.045   17.922   18.045
+mad            17.953   18.020   17.905   18.036
+diff           13.533   13.605   13.499   13.643
+resid          12.781   12.852   12.751   12.901
+zdiff          12.160   12.223   12.134   12.217
+zdiff_robust   12.160   12.217   12.132   12.215
+
+Sigma from differences between voxels a distance apart (working scale)
+distance        x        y        z
+       1   13.523   13.504   12.144
+       2   17.367   17.367   15.629
+       3   17.822   17.851   16.268
+       4   17.844   17.859   16.384
+       5   17.812   17.834   16.410
+       6   17.824   17.818   16.427
+
+Sigma, earlier method (diff and resid):   13.157   (3381.302 stored units)
+Sigma, z neighbours (zdiff_robust):       12.160   (3125.151 stored units)
+Sigma, z differences 4 apart:             16.384   (4210.724 stored units)
+```
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--roi X0 Y0 Z0 W H D` or `--centre-cube N` | whole scan | Region to examine |
+| `--slices N` | 20 | Number of slices examined, spread evenly from the first to the last slice of the region |
+| `--scale LO HI` | `0 65535` (`0 255` for 8-bit and float scans) | Stored values that map to 0 and 255. Sigma is printed on the 0–255 scale and in stored units |
+| `--lags N` | 6 | Largest distance in the second table; 0 leaves the table out |
+
+The example takes 5 seconds; the whole scan with its corners takes 18.
+A scan with NaN or infinite values is refused.
+
+### 11.4 The estimators
+
+Each examined slice gives one value per estimator. The first table shows
+the median, mean and quartiles of these values over the slices.
+
+| Name | Formula (s = slice, n = next slice) | What it contains besides noise |
+|---|---|---|
+| `std_dev` | standard deviation of s | All material contrast. An upper limit only |
+| `mad` | 1.4826 × MAD(s) | The same |
+| `diff` | std of all x and y neighbour differences / √2 | Material edges within the slice |
+| `resid` | 1.4826 × MAD(s − mean of the 3 × 3 neighbourhood) | Material edges within the slice. Reads 5.7 % low even on pure independent noise, because the mean contains the voxel itself |
+| `zdiff` | std of (n − s) / √2 | Only what changes from slice to slice |
+| `zdiff_robust` | 1.4826 × MAD(n − s) / √2 | The same, less sensitive to single outliers |
+
+MAD(v) is the median of |v − median(v)|. The first five are the estimators
+of the script. Its recommendation, printed as "earlier method", is the mean
+of the medians of `diff` and `resid`. `zdiff_robust` is new.
+
+The second table repeats the robust difference estimate for voxels 1, 2, …
+N apart, along each axis. How to read it:
+
+- **All entries equal:** independent noise, no material change over these
+  distances. Every entry is sigma.
+- **Entries rise over the first few distances and then stay level:** the
+  noise of nearby voxels is correlated. The level is sigma. The entry at
+  distance d is low by the factor √(1 − correlation at distance d).
+- **Entries keep rising:** the material changes over these distances.
+
+The last line of the output, "z differences 4 apart", is the z entry of
+this table at distance 4.
+
+### 11.5 Functions
+
+| Function | Purpose |
+|---|---|
+| `sliceNoise(slice, next, width, height)` | The six estimates of one slice held in memory |
+| `summarise(values)` | Median, mean and quartiles; quartiles interpolated as numpy does |
+| `sampleSlices(depth, count)` | The slice numbers: i × (depth − 1) / (count − 1), rounded down |
+| `estimateNoise(info, region, slices)` | Reads the slices of a scan and returns all estimates and the earlier recommendation |
+| `differenceByLag(info, region, slices, max_lag)` | The table by distance |
+
+`sliceNoise` works on plain arrays and reads no files, so it can later be
+replaced by a GPU version (phase 5). All results are in stored units; the
+command converts them to the working scale. Memory use is two slices.
+
+### 11.6 Check against the earlier script
+
+The script needs numpy, which neither machine has, so it could not be run
+itself. Two independent checks stand in for it:
+
+- **Its formulas written again in plain Python** (standard library only)
+  and run on the tracked scan `Sample1_18p15_5mu_c64`, in counts:
+
+  | Estimator | Plain Python: median / mean / Q1 / Q3 | `denoiser noise` |
+  |---|---|---|
+  | `diff` | 3692.052 / 3696.376 / 3581.232 / 3777.587 | identical |
+  | `resid` | 3456.064 / 3471.520 / 3349.729 / 3553.442 | identical |
+  | `zdiff` | 3721.410 / 3701.614 / 3450.459 / 3913.973 | identical |
+  | recommended | 3574.058 | identical |
+
+- **A slice of four voxels computed by hand** is a unit test.
+
+The rough neighbour-difference figures of section 4.6 (12 and 14 for the
+two test scans) are the `diff` values found here (12.1 and 14.4).
+
+One difference remains possible: the script picks its slices with floating
+point arithmetic, the new code with whole numbers. They can differ by one
+slice when i × (depth − 1) / (count − 1) is a whole number. For 20 slices
+out of 1000, 250 or 64 it never is, except for the first and last slice.
+
+### 11.7 Check on the phantom
+
+The phantoms of chapter 6 have independent noise of sigma 14.0 on the 0–255
+scale.
+
+| Phantom | Earlier method | z neighbours | z, 4 apart |
+|---|---|---|---|
+| Fine (fibres 20 voxels wide) | 14.90 | 14.05 | 14.12 |
+| Coarse (fibres 4 voxels wide) | 19.14 | 14.04 | 14.65 |
+| Coarse, noise-free volume | 14.47 | 0.35 | 2.02 |
+
+- **The earlier method takes fibre edges for noise.** The error is 6 % on
+  the fine phantom and 37 % on the coarse one, where every other voxel is an
+  edge. A noise-free volume is reported as sigma 14.5.
+- **The z estimates are right** to 0.3 % at distance 1. At distance 4 they
+  are 1 % and 5 % high: the phantom fibres twist around the axis, so the
+  material does change a little over four slices. The coarse phantom twists
+  five times more per voxel than the fine one.
+
+### 11.8 The noise of the two full scans
+
+Region: the square inside the reliable circle of chapter 10, all 1000
+slices (`--roi 196 196 0 750 750 1000`). Values on the 0–255 scale.
+
+| | `Sample1_18p15_5mu` | `Sample2_5mu` |
+|---|---|---|
+| Spread of a slice (`std_dev`) | 17.98 | 15.04 |
+| Earlier method | 13.16 | 11.02 |
+| z neighbours | 12.16 | 10.17 |
+| **z, 4 apart** | **16.38** | **13.70** |
+| In counts | 4 211 | 3 521 |
+
+Estimate from z differences by distance:
+
+| Distance | 1 | 2 | 3 | 4 | 5 | 6 |
+|---|---|---|---|---|---|---|
+| `Sample1_18p15_5mu` | 12.14 | 15.63 | 16.27 | 16.38 | 16.41 | 16.43 |
+| `Sample2_5mu` | 10.16 | 13.08 | 13.61 | 13.70 | 13.72 | 13.72 |
+| Share of noise in common | 45 % | 9 % | 1 % | – | – | – |
+
+What the numbers say:
+
+- **The noise is correlated over about two voxels.** The estimate rises by
+  35 % from distance 1 to distance 4 and is level after that. The shares in
+  the last row follow from the ratio to the level and are the same for both
+  scans to within one percentage point. The x and y columns show the same
+  rise over the same distances, so the correlation is alike in all three
+  directions.
+- **The level is noise, not material.** Over 40 slices the z estimate rises
+  further only slowly, from 13.59 at distance 4 to 13.72 at 10, 13.91 at 20
+  and 14.23 at 40 (232³ crop of the second scan). That slow rise is the
+  material changing along the fibres. Carried back to distance 4 it amounts
+  to less than 1 %.
+- **Single voxels carry more noise than signal.** Taking the noise out of
+  the slice spread leaves a material contrast of about 7.4 (first scan) and
+  6.2 (second scan) as standard deviation, less than half the noise. At 5 µm
+  voxels a 20 µm fibre is four voxels wide and mostly edge.
+- **The noise is nearly the same everywhere in the reliable circle.**
+
+  | Where | `Sample1_18p15_5mu` | `Sample2_5mu` |
+  |---|---|---|
+  | Column 200 × 200 on the axis | 16.26 | 13.59 |
+  | Column at radius 250 | 16.39 | 13.70 |
+  | Column at radius 400 | 16.51 | 13.78 |
+  | Slices 0–99 | 17.04 | 14.25 |
+  | Slices 450–549 | 16.39 | 13.70 |
+  | Slices 900–999 | 16.36 | 13.69 |
+  | Region of the earlier 250³ samples | 16.26 | 13.54 |
+
+  It grows by 1.5 % from the axis to radius 400, and the first hundred
+  slices are 4 % noisier than the rest. One sigma per scan is enough.
+- **The whole scan including its corners reads lower** (15.70 and 13.16),
+  because it includes the corners outside the field of view. The estimate
+  should be taken on the region that is filtered.
+
+### 11.9 What this means for the filter
+
+- **Sigma decides the patch size in the original program** (section 4.6):
+  up to 15 the patch radius is 1, above 15 it is 2. The earlier method would
+  have put both scans in the first row (13.2 and 11.0). The noise found here
+  puts the first scan in the second row (16.4) and the second scan in the
+  first (13.7). The 17 used earlier is in the second row. Step 1.5 separates
+  the patch size from sigma, as chapter 7 already proposed.
+- **Which number the filter should get.** The filter compares patches that
+  lie several voxels apart. The difference between two such patches contains
+  the full noise of both, whatever the correlation between direct
+  neighbours. The value at the level (16.4 and 13.7) is therefore the right
+  sigma for the filter, not the neighbour value.
+- **The phantom results of chapter 7 were obtained with independent
+  noise.** Real noise that is shared between neighbours forms small blobs
+  two to three voxels wide. A patch of radius 1 is no larger than such a
+  blob, so the filter can mistake noise for structure more easily than on
+  the phantom. How much this costs is not known yet.
+
+### 11.10 Tests and results on both platforms
+
+`make test`: 47 test cases, 1570 checks, all pass on both machines; the
+build with address and undefined-behaviour checks on the second machine
+reports nothing. The new cases:
+
+| Case | What it checks |
+|---|---|
+| `sampleSlices` | First and last slice, rounding, fewer slices than asked for |
+| `summarise` | Median, mean and quartiles as numpy gives them; NaN left out |
+| Four voxels by hand | All six estimators against values computed by hand; single voxel; no next slice |
+| Independent noise | All estimators within 2–3 % of the true sigma; `resid` at √(8/9) of it |
+| Material equal in both slices | In-slice estimators read high, z estimators stay right |
+| `estimateNoise` | Slice numbers, summaries, regions, wrong arguments |
+| NaN | Refused |
+| Tracked scan | Fixed values for `Sample2_5mu_c64`, the same on every platform |
+| Correlated noise | Noise with known correlation along z: the table by distance shows √(1 − correlation) at distances 1 and 2 and the true sigma from 3 on |
+
+The output of `denoiser noise` for the 232³ crop and for a tracked 64³ scan
+is the same on both machines, digit for digit.
+
+### 11.11 Open points and proposals
+
+- **Proposal: `denoiser run` takes "z differences 4 apart" as its sigma**
+  when none is given, estimated on the region to be filtered, and writes all
+  three values and the method into the run record. `--sigma` overrides it.
+  The earlier method stays in the output for comparison with old runs.
+- **Limit of the new estimate.** It relies on the material being nearly
+  constant over four slices. That holds for rods scanned with the fibres
+  along z. For a sample without such a direction the estimate reads high,
+  and the table by distance shows it by rising without a level.
+- **Limit of the fixed distance.** Four voxels suit these scans. A scan
+  reconstructed differently may need another distance; the table shows where
+  the level begins. The distance is a constant in `src/main.cpp`.
+- **Proposal: give the phantom correlated noise** (an option of
+  `make_phantom.py`, 45 % and 9 % as measured) and repeat the scores of
+  chapter 7 with it at the start of step 1.5, before the experiment with
+  separate radii per axis. Otherwise the choice of patch size rests on a
+  noise model the scans do not follow.
+- **The planned 1 µm scan gives a direct check.** The air in the bore hole
+  has no material contrast, so the plain standard deviation there is the
+  noise. It should agree with the estimate from z differences. Whether the
+  noise is correlated over two voxels there as well depends on how the lab
+  reconstructs that scan.
+- **Sigma differs between scans** (16.4 and 13.7 with the same nominal
+  settings), so it has to be estimated for each scan, not carried over.
+- **Step 1.5 (parameter choice and radii per axis) is next.**

@@ -63,6 +63,8 @@ struct ScanStatistics {
     double maximum = 0.0;         ///< largest value
     double mean = 0.0;            ///< arithmetic mean
     double std_dev = 0.0;         ///< standard deviation (population formula)
+    std::int64_t at_low_limit = 0;   ///< integer scans: voxels equal to 0, the smallest storable number
+    std::int64_t at_high_limit = 0;  ///< integer scans: voxels equal to the largest storable number (255 or 65535)
 };
 
 /// Returns the number of bytes one sample takes in the file.
@@ -166,7 +168,9 @@ std::vector<float> readVolume(const ScanInfo& info);
 /// Computes value statistics of a whole scan, reading it slice by slice so
 /// that the memory needed is that of one slice.
 /// @param info  the scan description
-/// @return minimum, maximum, mean and standard deviation of the finite values
+/// @return minimum, maximum, mean and standard deviation of the finite values,
+///         and for integer scans the number of voxels at either end of the
+///         storable range, where the true value may have been cut off
 /// @throws std::runtime_error if the file cannot be read
 ScanStatistics scanStatistics(const ScanInfo& info);
 

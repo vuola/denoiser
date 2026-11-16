@@ -344,6 +344,8 @@ ScanStatistics scanStatistics(const ScanInfo& info) {
     // error small on volumes of billions of voxels.
     long double sum = 0.0L;
     long double sum_squares = 0.0L;
+    const bool integer_type = info.sample_type != SampleType::kFloat32;
+    const float high_limit = info.sample_type == SampleType::kUInt8 ? 255.0f : 65535.0f;
     for (int z = 0; z < info.size.depth; ++z) {
         readSamples(file, info, static_cast<std::int64_t>(z) * static_cast<std::int64_t>(slice), slice,
                     buffer, values.data());
@@ -353,6 +355,11 @@ ScanStatistics scanStatistics(const ScanInfo& info) {
             if (!std::isfinite(value)) {
                 ++result.non_finite;
                 continue;
+            }
+            if (integer_type && value == 0.0f) {
+                ++result.at_low_limit;
+            } else if (integer_type && value == high_limit) {
+                ++result.at_high_limit;
             }
             const double v = value;
             minimum = std::min(minimum, v);

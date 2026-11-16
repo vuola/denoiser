@@ -17,6 +17,7 @@ completed.
 | 7 | Step 0.4: baseline (run time, memory, accuracy, phantom scores) | Done, committed |
 | 8 | Step 1.1: scan reader and the command `denoiser info` | Done, committed |
 | 9 | Step 1.2: scan writer | Done, committed |
+| 10 | Step 1.3: pre-processing, and the brightness drift of the present scans | Done, committed |
 
 ---
 
@@ -1587,3 +1588,266 @@ handled correctly when writing.
   working range and back, NaN handling, the count of voxels at the limits of
   the 16-bit range (section 8.6), and the measurement of brightness drift
   from the rod centre to the rim.
+
+---
+
+## 10. Step 1.3 — Pre-processing and brightness drift
+
+Status: **done, committed.**
+
+This step adds the pieces between reading a scan and filtering it: cutting
+a region, mapping counts to the working range and back, and handling NaN
+values. It also measures how brightness changes from the centre of the scan
+to its rim (requirement R4). The measurement gave three results that matter
+for the later phases, stated first.
+
+### 10.1 Main results
+
+1. **Both scans get about 10 % brighter from the centre to the rim.** The
+   rise is about 3 000 counts (12 on the 0–255 scale). That is more than a
+   quarter of the whole spread between dark and bright voxels, so one fixed
+   threshold between glass and epoxy cannot hold across a slice. The drift
+   is too slow to disturb the filter (section 10.5).
+2. **The present scans contain no air.** Neither a bore hole nor air around
+   the rod shows in the profiles. They therefore cannot be used to test the
+   bore-hole calibration of phase 4.
+3. **The usable part of a scan is a circle, not the full square.** Beyond a
+   radius of about 540 voxels the brightness falls steeply; the corners of
+   the square lie outside the reconstructed field of view.
+
+The voxels at 0 and 65535 found in step 1.1 turned out to be harmless: each
+scan has exactly one of each, next to the rotation axis.
+
+### 10.2 What was added
+
+| File | Purpose |
+|---|---|
+| `include/preprocess.hpp`, `src/preprocess.cpp` | Intensity mapping, centred cube, NaN replacement, cutting a region |
+| `include/radial_profile.hpp`, `src/radial_profile.cpp` | Brightness against distance from the axis |
+| `include/scan_reader.hpp` | The statistics now count the voxels at 0 and at the top of the range |
+| `src/main.cpp` | Commands `denoiser crop` and `denoiser profile`; `denoiser info` prints the counts at the limits |
+| `tests/test_preprocess.cpp` | 10 test cases |
+| `run/profile/` | The profiles of the two full scans (CSV) |
+
+The program version is now 1.3.0.
+
+### 10.3 Commands
+
+**Cut a region** (replaces `PickCube.ijm` and the Python crop script for
+everyday use):
+
+```
+denoiser crop data/RAW/Sample2_5mu --centre-cube 232 --out data/crops/Sample2_5mu_c232
+denoiser crop data/RAW/Sample2_5mu --roi 446 446 374 250 250 250 --out data/crops/old_cube
+```
+
+| Option | Meaning |
+|---|---|
+| `--roi X0 Y0 Z0 W H D` | First voxel, counted from 0, and size |
+| `--centre-cube N` | Cube of N voxels in the middle of the scan |
+| `--out DIR` | Output folder; created if missing |
+
+The result is a scan folder in the lab's format: `DIR/<name>.vol` and
+`.vgi`, where `<name>` is the last part of `DIR`, in the source's sample
+type and with its voxel size. `DIR/crop_record.txt` states the source and
+the first voxel, so that a result computed on the crop can be placed back
+into the grid of the full scan (requirement R3):
+
+```
+denoiser 1.3.0 crop
+source = data/RAW/Sample2_5mu/Sample2_5mu_.vol
+source size = 1142 1142 1000
+first voxel (x y z, counted from 0) = 455 455 384
+size (x y z) = 232 232 232
+```
+
+**Brightness profile:**
+
+```
+denoiser profile data/RAW/Sample2_5mu --out run/profile/Sample2_5mu_radial.csv
+```
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--centre X Y` | middle of the x-y plane | The axis, in voxels |
+| `--ring W` | 8 | Ring width in voxels |
+| `--slices Z0 N` | all | Use N slices starting at slice Z0 |
+| `--out FILE` | screen | Where the table goes |
+
+The voxels are sorted into rings by their distance from the axis. The table
+has one line per ring: inner and outer radius, number of voxels, mean, 10th
+percentile, median, 90th percentile, and the number of voxels at the bottom
+and at the top of the value range. In a rod the 10th percentile follows the
+darker material and the 90th the brighter one, so drift can be told from a
+change in the mix of materials. A full scan takes 8 to 20 seconds.
+
+**`denoiser info`** now ends with two more lines:
+
+```
+At 0:         1 voxels (7.67e-08 %)
+At 65535:     1 voxels (7.67e-08 %)
+```
+
+### 10.4 Functions
+
+All are documented in the headers.
+
+| Function | What it does |
+|---|---|
+| `IntensityMap` with `toWork()`, `toStored()` | Linear mapping between stored values and the working range: `low` becomes 0, `high` becomes 255 |
+| `defaultMap(type)` | Full range of the sample type (0–65535 for 16 bits), the scaling of the old workflow |
+| `mapToWork()`, `mapToStored()` | The mapping applied to a block of values |
+| `centredCube(size, n)` | Region of a cube in the middle of a volume |
+| `replaceNonFinite(values, replacement)` | Replaces NaN and infinity, returns how many |
+| `cropScan(source, region, path)` | Writes a region as a scan of its own, slab by slab |
+| `radialProfile(info, settings)` | The brightness profile |
+
+How the mapping behaves:
+
+- **Linear, and nothing is clipped** (requirement R2). A value outside the
+  mapped range lands outside 0–255 and comes back unchanged. Only the writer
+  limits values to what the file type can hold, and it counts them (section
+  9.2).
+- **Same numbers as the old workflow.** With the default mapping the working
+  value is count × 255 / 65535, computed in double precision and rounded to
+  float once, exactly as the reference scripts of phase 0 do.
+- **Loss-free there and back.** Every one of the 65 536 possible counts
+  returns to itself after mapping to the working range and back, also with
+  a narrower or wider mapped range.
+- **The mapping decides what sigma means.** The filter picks its settings
+  from sigma on the working scale. With a narrower mapped range the same
+  noise is a larger sigma. The default keeps old and new runs comparable.
+
+NaN and infinity occur only in float files. The filter cannot work with
+them. The function to replace them is in place; what `denoiser run` does by
+default is proposed in section 10.7.
+
+### 10.5 Brightness drift of the two scans
+
+Profiles around the middle of the x-y plane, all 1000 slices, rings of 8
+voxels, values in counts. The full tables are in `run/profile/`.
+
+| | `Sample1_18p15_5mu` | `Sample2_5mu` |
+|---|---|---|
+| Centre (radius below 96 voxels): mean | 33 022 | 27 759 |
+| Centre: 10th / 90th percentile | 27 148 / 38 855 | 22 787 / 32 692 |
+| Brightest ring: radius | 536–544 voxels (2.7 mm) | 536–544 voxels |
+| Brightest ring: mean | 36 329 | 30 672 |
+| Brightest ring: 10th / 90th percentile | 30 248 / 42 365 | 25 590 / 35 720 |
+| Rise of the mean, centre to brightest ring | 3 307 counts (10.0 %) | 2 913 counts (10.5 %) |
+| The same on the 0–255 scale | 12.9 | 11.3 |
+| Rise as a share of the 10th–90th percentile spread | 28 % | 29 % |
+| Mean at radius 571 (edge of the inscribed circle) | 33 000 | 27 900 |
+| Mean in the corners (radius 800) | 26 000 | 21 900 |
+
+Mean brightness against radius, `Sample1_18p15_5mu`:
+
+| Radius (voxels) | 0–100 | 144 | 240 | 336 | 432 | 480 | 536 | 552 | 568 | 600 | 700 | 800 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Mean (counts) | 33 100 | 33 200 | 33 350 | 33 930 | 34 730 | 35 350 | 36 330 | 35 110 | 33 000 | 30 780 | 27 670 | 25 970 |
+
+The drift also depends on the height in the scan. Mean in the ring of radius
+480–540 voxels:
+
+| Slices | `Sample1_18p15_5mu` | `Sample2_5mu` |
+|---|---|---|
+| 0–99 | 34 869 | 29 421 |
+| 450–549 | 35 904 | 30 297 |
+| 900–999 | 34 827 | 29 441 |
+
+At the centre the three heights agree within 250 counts.
+
+What the numbers say:
+
+- **The drift is an offset, not a change of contrast.** The 10th and the
+  90th percentile rise by nearly the same amount as the mean (about 3 100
+  and 3 500 counts in the first scan). Dark and bright voxels are lifted
+  together.
+- **It is nearly flat near the centre and grows towards the rim.** Inside a
+  radius of 250 voxels the mean changes by 1.5 % in the first scan and 3 %
+  in the second. Most of the rise comes in the outer third.
+- **It is stronger at mid-height than at the top and bottom,** by about
+  1 000 counts at the rim. A correction that depends on the radius alone
+  would leave this part.
+- **The filter is not disturbed by it.** The steepest part of the drift is
+  about 35 counts per voxel. Over the filter's search radius of 10 voxels
+  that is 350 counts, or 1.4 on the 0–255 scale, against a noise sigma of
+  about 17. No correction is needed before filtering, and none is applied,
+  so the values stay linear (R2).
+- **The classification is disturbed by it.** A threshold that separates
+  glass from epoxy at the centre is off by more than a quarter of the
+  dark-to-bright spread at the rim. Phase 4 (steps 4.1–4.2) has to work with
+  levels that follow the position, or correct the drift first. The profile
+  command gives the data for either.
+- **No air in these scans.** With the lab's scaling, air would lie near
+  17 900 counts in the first scan and 15 400 in the second (section 6.2).
+  The 10th percentile never comes near these values at any radius inside the
+  field of view; it stays at the level of the rod material. There is no bore
+  hole on the axis and no air at the rim. The first scan's field of view
+  (5.7 mm) lies inside the 18.15 mm rod, which explains the rim.
+- **Beyond a radius of about 540 voxels the data are not reliable.** The
+  brightness turns and falls by 10 000 counts towards the corners. The
+  square is 1142 voxels wide, so the inscribed circle has a radius of 571;
+  the last 30 voxels inside it are already affected. Results from this zone
+  should not be used.
+- **The voxels at 0 and 65535** are one each per scan, both within 16
+  voxels of the axis. They look like marks or a reconstruction artefact on
+  the rotation axis, not like clipping. No other voxel reaches a limit,
+  so the default mapping loses nothing.
+
+### 10.6 Tests and results on both platforms
+
+| Test case | Checks |
+|---|---|
+| Default mapping | Same numbers as the old workflow; float scans unchanged |
+| There and back | All 65 536 counts return to themselves, for three mapped ranges |
+| Linear, not clipped | Values outside the mapped range continue on the same line |
+| Bad ranges | Refused; the values are left untouched |
+| Centred cube | The cube of the old workflow, odd leftover space, cubes that do not fit |
+| NaN replacement | NaN and both infinities replaced and counted |
+| Cutting a region | Right voxels, description kept, whole scan copied byte for byte, bad region and overwriting the source refused |
+| Profile on rings | A volume whose value depends on the radius only: every ring's mean exact, percentiles within one histogram class, voxel counts, part of the slices, another axis, settings out of range |
+| Percentiles and limits | Known 10th, 50th and 90th percentile; voxels at the limits counted |
+| Statistics at the limits | Counted for integer scans, zero for the tracked scans and for float scans |
+
+| Check | Development machine | Second machine |
+|---|---|---|
+| `make test` | 38 test cases, 1489 checks, all pass | the same |
+| `make test SANITIZE=1` | not available | all pass, no sanitizer report |
+| Compiler warnings | none | none |
+| Profile of the 232³ crop | | identical output, character for character |
+| `denoiser crop --centre-cube 232` of a full scan | identical to the crop made with the Python script in step 0.4, `.vol` and `.vgi` | |
+| Profiles of the full scans | 8–20 s each | not run (the full scans are on the development machine only) |
+
+### 10.7 Open points
+
+- **Centre of a cube and the old workflow.** `--centre-cube 250` starts at
+  slice 375, the true middle. The old macro started at 374 because ImageJ
+  counts slices from 1 (section 2.3). To repeat an old crop exactly, use
+  `--roi 446 446 374 250 250 250`.
+- **NaN in float input: proposal.** `denoiser run` refuses a float scan
+  that contains NaN or infinity and says how many there are, unless a
+  replacement value is given with an option. Scans from the lab are 16-bit
+  and cannot contain them, so this only concerns other raw files.
+- **Mapped range: proposal.** `denoiser run` keeps `--scale 0 65535` as the
+  default (section 2.4), for comparability with the old runs and because
+  the noise estimate of step 1.4 then gives sigma on the familiar scale.
+- **Drift correction is left to phase 4,** as planned in R4. This step
+  shows that it is needed for the classification and that it must follow
+  both radius and height. Nothing is corrected in the filter.
+- **Usable region of a scan.** Results are meaningful inside a radius of
+  about 530 voxels only, about 68 % of the square slice. Proposal: `denoiser
+  run` gets no mask for this (the filter does no harm outside), but phase 4
+  restricts its analysis to the reliable circle, and the report states the
+  radius.
+- **Consequence for the planned 1 µm scan (section 5.6).** If the new scan
+  is also reconstructed as a square with a circular field of view, the
+  recommended 2000 × 2000 voxels give a usable circle of about 1 900 voxels
+  diameter, or 1.9 mm around the 0.9 mm bore hole. The rise towards the rim
+  will be present there too, because that scan also lies inside the rod.
+  The bore hole on the axis gives the air level where the drift is flattest,
+  which is favourable. It is worth asking the CT lab whether their
+  reconstruction offers a correction for scans inside the sample.
+- **The test scans and crops lie near the axis** (within 165 voxels), where
+  the drift is below 2 %. The baseline of step 0.4 is not affected.
+- **Step 1.4 (noise estimate) is next.**

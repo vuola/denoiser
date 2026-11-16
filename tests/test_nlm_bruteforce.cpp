@@ -5,6 +5,7 @@
 #include "nlm_bruteforce.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
@@ -186,4 +187,83 @@ TEST_CASE("nlmBruteForce rejects bad arguments") {
     params = smallParams();
     params.patch_radius[1] = -1;
     CHECK_THROWS_AS(nlmBruteForce(volume, size, params), std::invalid_argument);
+}
+
+TEST_CASE("nlmWeight: the four combinations of distance and kernel") {
+    // Patch of 3 x 3 x 3 = 27 voxels, sigma 1, h 2, so h^2 = 4.
+    NlmParams params;
+    params.sigma = 1.0;
+    params.h = 2.0;
+    CHECK(denoiser::patchVoxels(params) == 27.0);
+    CHECK(params.normalise_distance == false);
+    CHECK(params.kernel == denoiser::NlmKernel::kRational);
+
+    // Sum over the patch: the noise level is 2 * 27 = 54.
+    CHECK(denoiser::nlmWeight(54.0, params) == 1.0);
+    CHECK(denoiser::nlmWeight(10.0, params) == 1.0);
+    CHECK(denoiser::nlmWeight(108.0, params) == doctest::Approx(4.0 / 58.0));
+    params.kernel = denoiser::NlmKernel::kExponential;
+    CHECK(denoiser::nlmWeight(108.0, params) == doctest::Approx(std::exp(-54.0 / 4.0)));
+
+    // Mean over the patch: 108 / 27 = 4, the noise level is 2, the excess 2.
+    params.normalise_distance = true;
+    CHECK(denoiser::nlmWeight(54.0, params) == 1.0);
+    CHECK(denoiser::nlmWeight(108.0, params) == doctest::Approx(std::exp(-0.5)));
+    params.kernel = denoiser::NlmKernel::kRational;
+    CHECK(denoiser::nlmWeight(108.0, params) == doctest::Approx(4.0 / 6.0));
+
+    // The patch size follows the radii of each axis.
+    params.patch_radius[2] = 4;
+    CHECK(denoiser::patchVoxels(params) == 81.0);
+}
+
+TEST_CASE("nlmBruteForce with the exponential kernel, worked out by hand") {
+    // The three voxels 0, 0, 9 of the earlier case, with sigma = 1 and h = 9.
+    // The right neighbour of voxel 1 has distance 81 and excess 79, so its
+    // weight is w = exp(-79 / 81). Voxel 1: 9w / (2 + w). Voxel 2: its left
+    // neighbour 0 has weight w, the other two are 9 with weight 1.
+    const VolumeSize size{3, 1, 1};
+    NlmParams params;
+    params.sigma = 1.0;
+    params.h = 9.0;
+    params.kernel = denoiser::NlmKernel::kExponential;
+    for (int axis = 0; axis < 3; ++axis) {
+        params.patch_radius[axis] = 0;
+        params.search_radius[axis] = 0;
+    }
+    params.search_radius[0] = 1;
+
+    const double w = std::exp(-79.0 / 81.0);
+    const std::vector<float> result = nlmBruteForce({0.0f, 0.0f, 9.0f}, size, params);
+    CHECK(result[0] == doctest::Approx(0.0));
+    CHECK(result[1] == doctest::Approx(9.0 * w / (2.0 + w)));
+    CHECK(result[2] == doctest::Approx(18.0 / (2.0 + w)));
+}
+
+TEST_CASE("nlmBruteForce: normalising the distance equals a larger h with the rational kernel") {
+    // With the rational kernel, the mean distance with strength h gives the
+    // same weights as the summed distance with strength h * sqrt(N).
+    const VolumeSize size{7, 6, 5};
+    const std::vector<float> volume = randomVolume(size, 5);
+    NlmParams summed = smallParams();
+    summed.patch_radius[2] = 2;  // 3 x 3 x 5 = 45 voxels
+    NlmParams mean = summed;
+    mean.normalise_distance = true;
+    summed.h = mean.h * std::sqrt(45.0);
+
+    const std::vector<float> a = nlmBruteForce(volume, size, summed);
+    const std::vector<float> b = nlmBruteForce(volume, size, mean);
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        CHECK(a[i] == doctest::Approx(b[i]).epsilon(1e-5));
+    }
+
+    // The exponential kernel gives a different result from the rational one.
+    NlmParams exponential = mean;
+    exponential.kernel = denoiser::NlmKernel::kExponential;
+    const std::vector<float> c = nlmBruteForce(volume, size, exponential);
+    double largest = 0.0;
+    for (std::size_t i = 0; i < b.size(); ++i) {
+        largest = std::max(largest, std::fabs(static_cast<double>(b[i]) - c[i]));
+    }
+    CHECK(largest > 0.01);
 }

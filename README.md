@@ -19,6 +19,7 @@ completed.
 | 9 | Step 1.2: scan writer | Done, committed |
 | 10 | Step 1.3: pre-processing, and the brightness drift of the present scans | Done, committed |
 | 11 | Step 1.4: noise estimate, and the noise of the present scans | Done, committed |
+| 12 | Step 1.5: filter settings, and which of them suit fibre rods | Done, committed |
 
 ---
 
@@ -2130,9 +2131,9 @@ reports nothing. The new cases:
 The output of `denoiser noise` for the 232³ crop and for a tracked 64³ scan
 is the same on both machines, digit for digit.
 
-### 11.11 Open points and proposals
+### 11.11 Open points and decisions
 
-- **Proposal: `denoiser run` takes "z differences 4 apart" as its sigma**
+- **Decided in review: `denoiser run` takes "z differences 4 apart" as its sigma**
   when none is given, estimated on the region to be filtered, and writes all
   three values and the method into the run record. `--sigma` overrides it.
   The earlier method stays in the output for comparison with old runs.
@@ -2143,7 +2144,7 @@ is the same on both machines, digit for digit.
 - **Limit of the fixed distance.** Four voxels suit these scans. A scan
   reconstructed differently may need another distance; the table shows where
   the level begins. The distance is a constant in `src/main.cpp`.
-- **Proposal: give the phantom correlated noise** (an option of
+- **Decided in review: give the phantom correlated noise** (an option of
   `make_phantom.py`, 45 % and 9 % as measured) and repeat the scores of
   chapter 7 with it at the start of step 1.5, before the experiment with
   separate radii per axis. Otherwise the choice of patch size rests on a
@@ -2155,4 +2156,267 @@ is the same on both machines, digit for digit.
   reconstructs that scan.
 - **Sigma differs between scans** (16.4 and 13.7 with the same nominal
   settings), so it has to be estimated for each scan, not carried over.
-- **Step 1.5 (parameter choice and radii per axis) is next.**
+- **Step 1.5 (parameter choice and radii per axis) is next.** See chapter 12.
+
+---
+
+## 12. Step 1.5 — Filter settings
+
+Status: **done, committed.**
+
+This step makes every choice that the original program has built in a
+setting: patch radius and search radius per axis, `h`, how the patch
+distance is counted, and the weight function. It then measures on the
+phantom which settings classify glass and epoxy best. As decided in the
+review of step 1.4, the phantom first got noise that is shared between
+neighbouring voxels, as in the real scans.
+
+### 12.1 Main results
+
+1. **Noise shared between neighbours costs the original filter much of its
+   benefit.** Its best result on the fine phantom goes from 1.09 % wrong
+   voxels to 1.93 %, on the coarse phantom from 6.9 % to 9.0 %.
+2. **A patch that is a single column along z is the best patch found.** With
+   a column of 17 voxels and a search window that is narrow across and long
+   along z, 1.32 % of the voxels are wrong on the fine phantom and 7.0 % on
+   the coarse one. Against the original filter at its best that is a third
+   fewer on the fine phantom and a fifth fewer on the coarse one.
+3. **That filter no longer depends on getting sigma right.** From sigma 12
+   to 16 (true value 14) its result moves between 1.26 % and 1.45 %. The
+   original filter changes its patch size at sigma 15 and fails above 25.
+4. **It visits a third of the positions.** The window of 7 × 7 × 61 has
+   2 989 positions against 9 261 of the original 21 × 21 × 21.
+5. **The plain mean along z classifies equally well** (1.26–1.31 % and
+   7.0 %). The column filter is ahead in the other scores: it leaves a
+   smaller error against the noise-free volume and keeps more of the small
+   voids.
+6. **The IPOL variant helps cube patches a little and column patches not at
+   all.** The original weight function stays the default.
+
+### 12.2 What was added
+
+| File | Purpose |
+|---|---|
+| `include/nlm_bruteforce.hpp`, `src/nlm_bruteforce.cpp` | Settings for the distance (sum or mean over the patch) and the weight function (rational or exponential); `nlmWeight`, `patchVoxels` |
+| `tests/reference/bruteforce_main.cpp` | Options `--patch`, `--search`, `--h-factor`, `--normalise`, `--kernel` |
+| `tests/reference/run_reference.py` | Passes such options on to the brute-force program |
+| `tests/phantom/make_phantom.py` | Option `--correlated-noise` |
+| `run/params.py` | The experiments of this chapter |
+| `run/params/linux/*.csv` | Their results: 5 files, 177 rows |
+| `tests/test_nlm_bruteforce.cpp` | 3 new test cases |
+
+The program version is now 1.5.0. The command `denoiser` itself is
+unchanged in this step; the settings reach it with the fast filter (section
+12.9).
+
+### 12.3 The settings
+
+| Setting | Original program | Now |
+|---|---|---|
+| Patch radius | One number for all axes, chosen by sigma from a table | Three numbers: x, y, z |
+| Search radius | One number, from the same table | Three numbers |
+| `h` | 0.3 to 0.4 × sigma, from the table | Any factor |
+| Patch distance | Sum over the patch | Sum, or mean over the patch |
+| Weight | h² / (h² + excess) | That, or exp(−excess / h²) |
+
+"Excess" is the patch distance minus what noise alone would give
+(2 × sigma² per voxel). Mean distance with the exponential weight is the
+variant of the IPOL paper. With the summed distance the same `h` acts more
+sharply the larger the patch is; with the mean it does not.
+
+The table of the original program remains available as `originalParams`,
+and with it the brute-force filter still reproduces the original program:
+on the coarse phantom both give 8.99 % wrong voxels at sigma 16.
+
+### 12.4 The phantom with shared noise
+
+```
+python tests/phantom/make_phantom.py --preset fine --correlated-noise
+```
+
+makes `build/phantom/phantom_fine_cn`. The independent noise is averaged
+with its neighbours along x, y and z with the weights 0.02, 0.245, 1,
+0.245, 0.02 and scaled back to the requested sigma.
+
+| Distance in voxels | 1 | 2 | 3 |
+|---|---|---|---|
+| Share of noise in common, phantom | 44.6 % | 8.9 % | 0.9 % |
+| The same, measured on the real scans (section 11.8) | 45 % | 9 % | 1 % |
+
+`denoiser noise` on the coarse phantom made this way shows the pattern of
+the real scans: 10.5 from z neighbours, 14.6 from z differences four apart
+(true sigma 14.0). Without the option the phantoms are the same files as
+before, byte for byte, and both kinds are identical on both machines.
+
+One thing is not known: how much noise diagonal neighbours share in the
+real scans. The phantom's value follows from its construction (20 %).
+
+### 12.5 Experiments
+
+All runs are on the second machine with the brute-force filter, true sigma
+14, sigma given to the filter 14 and `h` = 0.4 × sigma unless stated. Radii
+are written x y z. "Wrong" is the share of misclassified voxels
+(`wrong_all` of section 6.3); "voids" is the share of void contrast that is
+left. The files in `run/params/linux/` hold all rows and all scores.
+
+**Fine phantom, shared noise** (fibres 20 voxels wide, as in the coming
+1 µm scans):
+
+| Filter | Patch | Search | Wrong | PSNR | Voids | Time |
+|---|---|---|---|---|---|---|
+| None | | | 12.03 % | 25.2 dB | 1.05 | |
+| Original table, sigma 14 | 1 1 1 | 10 10 10 | 2.60 % | 33.4 dB | 0.36 | 124 s |
+| Original table, sigma 16 (its best) | 2 2 2 | 10 10 10 | 1.93 % | 36.8 dB | 0.44 | 413 s |
+| IPOL variant | 2 2 2 | 10 10 10 | 1.79 % | 36.4 dB | 0.77 | 430 s |
+| Cube patch, long window | 2 2 2 | 3 3 20 | 1.79 % | 35.6 dB | 0.58 | 90 s |
+| Stretched patch | 1 1 4 | 5 5 20 | 1.61 % | 36.6 dB | 0.47 | 192 s |
+| Stretched patch | 2 2 4 | 5 5 20 | 1.57 % | 36.4 dB | 0.58 | 394 s |
+| Stretched patch | 1 1 8 | 5 5 20 | 1.39 % | 37.7 dB | 0.55 | 353 s |
+| Column of 9 | 0 0 4 | 5 5 20 | 1.62 % | 34.4 dB | 0.45 | 67 s |
+| Column of 17 | 0 0 8 | 5 5 20 | 1.33 % | 36.3 dB | 0.40 | 120 s |
+| **Column of 17** | 0 0 8 | 3 3 30 | **1.32 %** | 36.4 dB | 0.42 | 73 s |
+| Column of 17 | 0 0 8 | 2 2 30 | 1.34 % | 36.2 dB | 0.46 | 37 s |
+| Column of 17 | 0 0 8 | 1 1 30 | 1.42 % | 35.6 dB | 0.53 | 14 s |
+| Column of 25 | 0 0 12 | 3 3 30 | 1.24 % | 37.2 dB | 0.37 | 105 s |
+| Column of 33 | 0 0 16 | 3 3 30 | 1.23 % | 37.6 dB | 0.33 | 142 s |
+| Mean along z | | 0 0 8 | 1.31 % | 34.1 dB | 0.27 | |
+| Mean along z | | 0 0 16 | 1.26 % | 35.8 dB | 0.14 | |
+| Median along z | | 0 0 16 | 1.38 % | 35.0 dB | 0.08 | |
+
+**Coarse phantom, shared noise** (fibres 4 voxels wide, as in the present
+5 µm scans):
+
+| Filter | Patch | Search | Wrong | PSNR | Voids | Time |
+|---|---|---|---|---|---|---|
+| None | | | 18.3 % | 25.2 dB | 0.94 | |
+| Original table, sigma 14 | 1 1 1 | 10 10 10 | 12.9 % | 29.2 dB | −0.41 | 13 s |
+| Original table, sigma 16 (its best) | 2 2 2 | 10 10 10 | 9.0 % | 31.3 dB | −0.13 | 44 s |
+| IPOL variant | 2 2 2 | 10 10 10 | 8.6 % | 31.8 dB | 0.20 | 46 s |
+| Stretched patch | 1 1 4 | 5 5 20 | 8.6 % | 31.8 dB | −0.31 | 20 s |
+| Stretched patch | 1 1 8 | 5 5 20 | 7.8 % | 32.4 dB | −0.03 | 37 s |
+| Column of 9 | 0 0 4 | 5 5 20 | 8.0 % | 31.9 dB | 0.06 | 7 s |
+| Column of 17 | 0 0 8 | 5 5 20 | 7.0 % | 33.1 dB | 0.02 | 13 s |
+| **Column of 17** | 0 0 8 | 3 3 30 | **7.0 %** | 33.0 dB | 0.02 | 8 s |
+| Column of 25 | 0 0 12 | 3 3 30 | 7.1 % | 32.9 dB | −0.03 | 11 s |
+| Column of 33 | 0 0 16 | 3 3 30 | 7.4 % | 32.6 dB | −0.05 | 15 s |
+| Mean along z | | 0 0 8 | 7.0 % | 32.5 dB | −0.06 | |
+| Mean along z | | 0 0 16 | 11.5 % | 29.9 dB | −0.28 | |
+
+**Independent against shared noise,** wrong voxels:
+
+| Filter | Fine, independent | Fine, shared | Coarse, independent | Coarse, shared |
+|---|---|---|---|---|
+| Patch 1 1 1, sigma 14 | 1.47 % | 2.60 % | 8.5 % | 12.9 % |
+| Patch 2 2 2, sigma 14 | 1.36 % | 1.85 % | 8.3 % | 9.1 % |
+| Patch 2 2 2, sigma 16 | 1.09 % | 1.93 % | 6.9 % | 9.0 % |
+| Column of 9, search 5 5 20 | | 1.62 % | 6.0 % | 8.0 % |
+| Mean along z, radius 8 | 0.98 % | 1.31 % | 5.4 % | 7.0 % |
+
+**How the column of 17 with search 3 3 30 reacts to sigma,** and for
+comparison the original table:
+
+| Sigma given | 12 | 14 | 16 | 18 | 20 | 25 |
+|---|---|---|---|---|---|---|
+| Column of 17, fine | 1.45 % | 1.32 % | 1.26 % | | | |
+| Column of 17, coarse | 7.5 % | 7.0 % | 6.9 % | | | |
+| Column of 9, fine | 1.77 % | 1.62 % | 1.56 % | 1.54 % | | |
+| Original table, fine | 2.71 % | 2.60 % | 1.93 % | | 2.75 % | 3.77 % |
+| Original table, coarse | 12.9 % | 12.9 % | 9.0 % | | 16.0 % | 36.3 % |
+
+**How the column of 9 reacts to `h`** (search 5 5 20): factors 0.4, 0.8,
+1.6 and 3.2 give 1.62, 1.59, 1.57 and 1.59 % on the fine phantom and 8.0,
+7.9, 8.1 and 9.3 % on the coarse one.
+
+**The IPOL variant with long patches:** patch 0 0 4 gives 1.63 % (fine) and
+8.0 % (coarse), the same as the original weight function; patch 1 1 4 gives
+1.56 % and 8.4 % against 1.61 % and 8.6 %.
+
+### 12.6 What the numbers say
+
+- **Small cube patches are the wrong tool for this noise.** A patch of
+  radius 1 is as large as one blob of shared noise, so blobs look like
+  structure and survive. The damage is largest exactly there: 12.9 %
+  against 8.5 % on the coarse phantom.
+- **Length along z is what counts.** Along z the material is the same over
+  many voxels while the noise is fresh after three, so a long column
+  averages the noise out of the comparison without mixing materials. Width
+  across the fibres adds cost and, on the coarse phantom, harm: 1 1 8 is
+  worse than 0 0 8 there, and 2 2 4 worse than 1 1 4.
+- **The best length depends on the voxel size.** On the fine phantom the
+  result still improves up to a column of 33 voxels. On the coarse phantom
+  17 is best and longer columns are worse, because the fibres there move
+  sideways faster per voxel. Requirement R8 (defaults reviewed on the first
+  1 µm scan) applies to this number in particular.
+- **A narrow, long search window is enough.** Three voxels to each side
+  across and 30 along z give the same result as 5 and 20, at 60 % of the
+  cost. Two voxels across cost another half and lose little.
+- **Sigma and `h` become uncritical.** With the column patch the result
+  changes by a few tenths of a percentage point over the whole range tried.
+  An error of the noise estimate of 10 to 15 % no longer matters.
+- **The mean along z remains as good at classifying.** It is the limit of
+  this filter family: a window of one column with all weights equal. What
+  the weights add shows in the other scores (about 2 dB better PSNR on
+  the fine phantom, more void contrast left), and should show on real rods,
+  whose fibres are not as regular as the phantom's. The phantom cannot
+  decide this.
+- **The window along z has the same upper limit as before** (section 7.5):
+  mean and median with radius 16 are clearly worse on the coarse phantom.
+  The earlier median with radius 16 at 5 µm was past the best window.
+
+### 12.7 Defaults for fibre rods (decided in review)
+
+| Setting | Default | Reason |
+|---|---|---|
+| Patch radius | 0 0 8 | Best or equal best on both phantoms |
+| Search radius | 3 3 30 | Same result as wider windows; a third of the original's positions |
+| Sigma | z differences 4 apart (decided, section 11.11) | |
+| `h` | 0.4 × sigma | Uncritical; the original's value |
+| Distance, weight | Sum, rational (the original's) | The IPOL variant brings no gain with this patch |
+
+- **Decided in review: this becomes the default of `denoiser run`,** in place of the original
+  behaviour. Section 1.8 (decision 3) says the default changes only on a
+  clear gain and by your decision. The gain on the phantom is a fifth to a third
+  fewer wrong voxels than the original at its best sigma, no dependence on that
+  sigma, and a third of the positions. The original table stays available
+  as an option, and the regression against the original program is
+  unaffected: it compares the fast filter with the brute-force filter at
+  equal settings.
+- **These defaults are for rods scanned with the fibres along z.** For any
+  other sample the original table is the safer choice.
+- **Whether the mean along z should be offered as a second method** in the
+  program is left open. It costs almost nothing to compute. Phase 4 can
+  compare both on real scans once a classification exists.
+
+### 12.8 Tests and results on both platforms
+
+`make test`: 50 test cases, 1795 checks, all pass on both machines; the
+build with address and undefined-behaviour checks on the second machine
+reports nothing. The new cases:
+
+| Case | What it checks |
+|---|---|
+| `nlmWeight` | The four combinations of distance and weight function against values computed by hand; patch size from per-axis radii |
+| Exponential weight by hand | Three voxels, result computed by hand |
+| Mean distance | With the rational weight, the mean distance with `h` equals the summed distance with `h` × √(patch size); the exponential weight gives a different result |
+
+The experiments ran on the second machine only (about two hours with the
+brute-force filter).
+
+### 12.9 Open points
+
+- **The fast filter does not exist in the new program yet.** The plan lists
+  accuracy (step 1.6) and speed (step 1.7) but no step that writes it.
+  Proposal: step 1.6 writes the fast filter with all settings of this
+  chapter and checks it against the brute-force filter; the accuracy of the
+  summed-area arithmetic is settled there. The command-line options follow
+  with `denoiser run` in step 1.8 as planned.
+- **A column patch needs no summed-area table in x and y.** The patch sum
+  runs along z only, which makes the fast filter simpler and its rounding
+  error smaller. Step 1.6 can use that.
+- **What the phantom does not show.** Its fibres are perfectly straight
+  with one common twist, and its shared noise is built from the correlation
+  along the axes only. The ranking of column filter and mean along z has to
+  be confirmed on real scans.
+- **Cost estimate.** The original program needed about 10 hours for a
+  present scan (section 7.3). With a third of the positions the same code
+  would need about 3 hours, before any of the speed work of step 1.7.

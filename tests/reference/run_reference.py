@@ -150,7 +150,7 @@ def run_and_measure(command):
     return process.wait(), None
 
 
-def run_reference(scan_dir, sigma, out_dir, program, keep_float, tag="ref"):
+def run_reference(scan_dir, sigma, out_dir, program, keep_float, tag="ref", options=()):
     """Filter the scan in scan_dir with the original program.
 
     Parameters:
@@ -160,6 +160,8 @@ def run_reference(scan_dir, sigma, out_dir, program, keep_float, tag="ref"):
         program     path of the reference program
         keep_float  also keep the unrounded float result as .f32
         tag         short text in the output name: <scan>_<tag>_s<sigma>
+        options     further command-line words for the program; only the
+                    brute-force filter takes any (see bruteforce_main.cpp)
 
     Returns a dict with the result .vol path ("vol"), the run time of the
     program in seconds ("seconds"), its peak memory in MB ("peak_mb", None
@@ -194,7 +196,7 @@ def run_reference(scan_dir, sigma, out_dir, program, keep_float, tag="ref"):
         write_big_endian_floats(float_in, work)
 
         start = time.perf_counter()
-        returncode, peak_mb = run_and_measure([program, float_in, float_out, f"{sigma:g}"])
+        returncode, peak_mb = run_and_measure([program, float_in, float_out, f"{sigma:g}", *options])
         seconds = time.perf_counter() - start
         if returncode != 0:
             raise RuntimeError(f"reference program failed with exit code {returncode}")

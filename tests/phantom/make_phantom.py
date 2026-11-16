@@ -38,6 +38,13 @@ scaled to the requested standard deviation, which is very close to a normal
 distribution. Only integer random numbers and the operations + - * / sqrt are
 used, so the same seed gives the same files on every platform.
 
+With --correlated-noise the noise of nearby voxels is related, as it is in
+the real scans (README chapter 11): the independent noise is averaged with
+its neighbours along x, y and z with the weights NOISE_KERNEL and scaled back
+to the requested standard deviation. Voxels 1, 2 and 3 apart along an axis
+then share 44.6 %, 8.9 % and 0.9 % of their noise. The phantom is then named
+phantom_<preset>_cn unless --name is given.
+
 Usage (from the repository root):
     python tests/phantom/make_phantom.py --preset fine
     python tests/phantom/make_phantom.py --preset coarse --sigma 17
@@ -67,6 +74,13 @@ NOISE_BYTES = 48
 NOISE_MEAN = NOISE_BYTES * 127.5
 NOISE_STD = math.sqrt(NOISE_BYTES * (256 ** 2 - 1) / 12.0)
 
+# Weights of --correlated-noise along each axis, for the voxels -2 ... +2. The
+# share of noise that voxels k apart have in common is
+# sum(w[i] * w[i + k]) / sum(w[i]^2): 0.446, 0.089, 0.009 for k = 1, 2, 3. The
+# two real scans show 0.45, 0.09 and 0.01 (README section 11.8).
+NOISE_KERNEL = (0.02, 0.245, 1.0, 0.245, 0.02)
+NOISE_REACH = len(NOISE_KERNEL) // 2
+
 # Sigma is given on the 0...255 working scale; the files hold 16-bit counts.
 WORK_TO_COUNTS = 65535.0 / 255.0
 
@@ -86,8 +100,56 @@ PRESETS = {
 COMMON_DEFAULTS = {
     "glass_share": 0.60, "tilt": (0.02, 0.01), "voids_per_diameter": 6,
     "air": 18000, "epoxy": 26000, "glass": 38000,
-    "sigma": 14.0, "drift": 0.0, "seed": 1,
+    "sigma": 14.0, "drift": 0.0, "seed": 1, "correlated_noise": False,
 }
+
+
+class CorrelatedNoise:
+    """Noise with standard deviation 1 that is related between nearby voxels.
+
+    slice() returns the noise of the next slice as a list of width * height
+    values, x fastest. Independent noise is drawn for a volume that is
+    NOISE_REACH voxels larger on every side and averaged along x, y and z
+    with NOISE_KERNEL, so the edge voxels are treated like all others.
+    """
+
+    def __init__(self, width, height, rng):
+        self.width, self.height, self.rng = width, height, rng
+        self.scale = (sum(w * w for w in NOISE_KERNEL) ** 1.5) ** -1 / NOISE_STD
+        # The slices z - reach ... z + reach, each already averaged in x and y.
+        self.window = [self._plane() for _ in range(2 * NOISE_REACH)]
+
+    def _plane(self):
+        """Draw one slice of independent noise and average it along x and y."""
+        wide, high = self.width + 2 * NOISE_REACH, self.height + 2 * NOISE_REACH
+        raw = self.rng.randbytes(NOISE_BYTES * wide * high)
+        white = [sum(raw[i * NOISE_BYTES:(i + 1) * NOISE_BYTES]) - NOISE_MEAN
+                 for i in range(wide * high)]
+        k0, k1, k2, k3, k4 = NOISE_KERNEL
+        # Along x: wide -> width columns.
+        rows = []
+        for y in range(high):
+            row = white[y * wide:(y + 1) * wide]
+            rows.append([k0 * row[x] + k1 * row[x + 1] + k2 * row[x + 2] + k3 * row[x + 3]
+                         + k4 * row[x + 4] for x in range(self.width)])
+        # Along y: high -> height rows.
+        plane = []
+        for y in range(self.height):
+            r0, r1, r2, r3, r4 = rows[y:y + 5]
+            plane.extend(k0 * a + k1 * b + k2 * c + k3 * d + k4 * e
+                         for a, b, c, d, e in zip(r0, r1, r2, r3, r4))
+        return plane
+
+    def slice(self):
+        """Return the noise of the next slice."""
+        self.window.append(self._plane())
+        k0, k1, k2, k3, k4 = NOISE_KERNEL
+        p0, p1, p2, p3, p4 = self.window
+        scale = self.scale
+        result = [(k0 * a + k1 * b + k2 * c + k3 * d + k4 * e) * scale
+                  for a, b, c, d, e in zip(p0, p1, p2, p3, p4)]
+        self.window.pop(0)
+        return result
 
 
 def fibre_grid(spacing, jitter, reach, rng):
@@ -255,11 +317,12 @@ def resolve_settings(args):
     settings["preset"] = args.preset
     for key in ("size", "fibre_diameter", "bore_diameter", "twist", "tilt", "glass_share",
                 "void_diameters", "voids_per_diameter", "air", "epoxy", "glass",
-                "sigma", "drift", "seed"):
-        value = getattr(args, key)
+                "sigma", "drift", "seed", "correlated_noise"):
+        value = getattr(args, key, None)
         if value is not None:
             settings[key] = tuple(value) if isinstance(value, list) else value
-    settings["name"] = args.name or f"phantom_{args.preset}"
+    settings["name"] = args.name or (f"phantom_{args.preset}"
+                                     + ("_cn" if settings["correlated_noise"] else ""))
 
     if min(settings["size"]) < 1:
         raise ValueError("size must be positive")
@@ -316,6 +379,8 @@ def make_phantom(settings, out_root):
     limited = 0
     pixels = width * height
     noise_rng = random.Random(settings["seed"] + 1000003)
+    correlated = (CorrelatedNoise(width, height, noise_rng)
+                  if settings["correlated_noise"] else None)
 
     with open(paths["noisy"], "wb") as noisy_file, open(paths["clean"], "wb") as clean_file, \
             open(paths["labels"], "wb") as label_file:
@@ -368,11 +433,17 @@ def make_phantom(settings, out_root):
 
             clean = array.array("H", bytes(2 * pixels))
             noisy = array.array("H", bytes(2 * pixels))
-            noise_bytes = noise_rng.randbytes(NOISE_BYTES * pixels)
+            if correlated is None:
+                noise_bytes = noise_rng.randbytes(NOISE_BYTES * pixels)
+            else:
+                unit_noise = correlated.slice()
             for i in range(pixels):
                 value = values[i]
                 clean[i] = min(65535, max(0, int(value + 0.5)))
-                noise = (sum(noise_bytes[i * NOISE_BYTES:(i + 1) * NOISE_BYTES]) - NOISE_MEAN) * noise_scale
+                if correlated is None:
+                    noise = (sum(noise_bytes[i * NOISE_BYTES:(i + 1) * NOISE_BYTES]) - NOISE_MEAN) * noise_scale
+                else:
+                    noise = unit_noise[i] * sigma_counts
                 count = int(math.floor(value + noise + 0.5))
                 if count < 0 or count > 65535:
                     limited += 1
@@ -415,6 +486,9 @@ def make_phantom(settings, out_root):
         ("voids_per_diameter", settings["voids_per_diameter"]),
         ("level_air", air), ("level_epoxy", epoxy), ("level_glass", glass),
         ("sigma_work", settings["sigma"]), ("sigma_counts", f"{sigma_counts:.2f}"),
+        ("noise", "correlated between neighbours, weights "
+                  + " ".join(str(w) for w in NOISE_KERNEL)
+                  if settings["correlated_noise"] else "independent"),
         ("drift", drift), ("seed", settings["seed"]),
         ("voxels", total),
         ("voxels_air", counts[LABEL_AIR]), ("voxels_epoxy", counts[LABEL_EPOXY]),
@@ -458,6 +532,8 @@ def main():
     parser.add_argument("--drift", type=float,
                         help="brightness drift: relative gain at the edge of the slice "
                              "against the axis, e.g. 0.1")
+    parser.add_argument("--correlated-noise", action="store_const", const=True,
+                        help="noise shared between neighbouring voxels, as in the real scans")
     parser.add_argument("--seed", type=int, help="random seed")
     args = parser.parse_args()
 

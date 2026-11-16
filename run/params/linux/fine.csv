@@ -1,0 +1,5 @@
+phantom,set,method,sigma,patch,search,h_factor,distance,kernel,psnr,rmse_work,wrong_all,wrong_interior,wrong_edge,void_contrast,seconds
+fine,A,brute force,14,1 1 1,10 10 10,0.4,sum,rational,38.0211,3.20248,0.0146912,0.000554652,0.117972,0.0644563,124.446
+fine,A,brute force,14,2 2 2,10 10 10,0.4,sum,rational,37.2804,3.48754,0.0135937,0.000984866,0.105713,-0.332252,412.994
+fine,A,brute force,16,1 1 1,10 10 10,0.4,sum,rational,40.0137,2.54597,0.0139107,0.000474161,0.112077,0.239596,124.117
+fine,A,brute force,16,2 2 2,10 10 10,0.4,sum,rational,40.7517,2.33861,0.0109188,0.00051857,0.086902,0.0967035,412.877

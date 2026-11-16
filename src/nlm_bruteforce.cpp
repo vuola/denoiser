@@ -44,6 +44,23 @@ NlmParams originalParams(double sigma) {
     return params;
 }
 
+double patchVoxels(const NlmParams& params) {
+    return static_cast<double>(2 * params.patch_radius[0] + 1) *
+           (2 * params.patch_radius[1] + 1) * (2 * params.patch_radius[2] + 1);
+}
+
+double nlmWeight(double distance, const NlmParams& params) {
+    const double voxels = patchVoxels(params);
+    const double noise = 2.0 * params.sigma * params.sigma;
+    const double excess =
+        params.normalise_distance ? distance / voxels - noise : distance - noise * voxels;
+    if (excess <= 0.0) {
+        return 1.0;
+    }
+    const double h2 = params.h * params.h;
+    return params.kernel == NlmKernel::kRational ? h2 / (h2 + excess) : std::exp(-excess / h2);
+}
+
 std::vector<float> nlmBruteForce(const std::vector<float>& volume, const VolumeSize& size,
                                  const NlmParams& params) {
     if (size.width < 1 || size.height < 1 || size.depth < 1) {
@@ -84,9 +101,14 @@ std::vector<float> nlmBruteForce(const std::vector<float>& volume, const VolumeS
         }
     }
 
-    const double patch_voxels = static_cast<double>(2 * px + 1) * (2 * py + 1) * (2 * pz + 1);
-    const double threshold = 2.0 * params.sigma * params.sigma * patch_voxels;
+    // The weight in terms of the summed distance, for every combination of
+    // settings: excess = distance * scale - offset.
+    const double patch_voxels = patchVoxels(params);
+    const double scale = params.normalise_distance ? 1.0 / patch_voxels : 1.0;
+    const double offset =
+        2.0 * params.sigma * params.sigma * (params.normalise_distance ? 1.0 : patch_voxels);
     const double h2 = params.h * params.h;
+    const bool rational = params.kernel == NlmKernel::kRational;
 
     // Index steps in the padded array.
     const std::ptrdiff_t step_y = static_cast<std::ptrdiff_t>(pw);
@@ -124,8 +146,11 @@ std::vector<float> nlmBruteForce(const std::vector<float>& volume, const VolumeS
                                 }
                             }
 
-                            const double excess = distance - threshold;
-                            const double weight = excess <= 0.0 ? 1.0 : h2 / (h2 + excess);
+                            const double excess = distance * scale - offset;
+                            const double weight =
+                                excess <= 0.0 ? 1.0
+                                : rational    ? h2 / (h2 + excess)
+                                              : std::exp(-excess / h2);
                             weighted_sum += weight * *other;
                             weight_sum += weight;
                             max_weight = std::max(max_weight, weight);

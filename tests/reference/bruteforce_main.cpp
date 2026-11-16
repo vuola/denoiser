@@ -2,13 +2,20 @@
 // and file format as the original program, so that
 // tests/reference/run_reference.py can run either one:
 //
-//     denoiser_bruteforce input output sigma
+//     denoiser_bruteforce input output sigma [options]
 //
 //   input   headerless 32-bit big-endian floats, x fastest; the volume size is
 //           read from the end of the file name: "<anything>WxHxD.<ext>"
 //   output  the filtered volume in the same format
 //   sigma   noise standard deviation on the 0...255 scale; patch radius,
 //           search radius and h follow the table of the original program
+//
+// Options, each replacing one choice of that table (README chapter 12):
+//   --patch PX PY PZ     patch radius along x, y and z
+//   --search SX SY SZ    search radius along x, y and z
+//   --h-factor F         h = F * sigma
+//   --normalise          patch distance as mean over the patch, not as sum
+//   --kernel K           rational (default) or exponential
 //
 // Exit code 0 on success, 1 on failure with the reason on standard error.
 
@@ -92,16 +99,55 @@ void writeBigEndianFloats(const std::string& path, const std::vector<float>& val
 
 }  // namespace
 
+/// Applies the options that follow the three fixed arguments to `params`.
+/// Throws std::runtime_error for an unknown option or a missing or bad value.
+void applyOptions(int argc, char** argv, denoiser::NlmParams& params) {
+    int i = 4;
+    const auto value = [&]() -> std::string {
+        if (i + 1 >= argc) {
+            throw std::runtime_error(std::string(argv[i]) + " needs more values");
+        }
+        return argv[++i];
+    };
+    for (; i < argc; ++i) {
+        const std::string option = argv[i];
+        if (option == "--patch" || option == "--search") {
+            int* radius = option == "--patch" ? params.patch_radius : params.search_radius;
+            for (int axis = 0; axis < 3; ++axis) {
+                radius[axis] = std::stoi(value());
+            }
+        } else if (option == "--h-factor") {
+            params.h = std::stod(value()) * params.sigma;
+        } else if (option == "--normalise") {
+            params.normalise_distance = true;
+        } else if (option == "--kernel") {
+            const std::string kernel = value();
+            if (kernel == "rational") {
+                params.kernel = denoiser::NlmKernel::kRational;
+            } else if (kernel == "exponential") {
+                params.kernel = denoiser::NlmKernel::kExponential;
+            } else {
+                throw std::runtime_error("--kernel must be rational or exponential");
+            }
+        } else {
+            throw std::runtime_error("unknown option " + option);
+        }
+    }
+}
+
 int main(int argc, char** argv) {
-    if (argc != 4) {
-        std::fprintf(stderr, "Usage: denoiser_bruteforce input output sigma\n"
+    if (argc < 4) {
+        std::fprintf(stderr, "Usage: denoiser_bruteforce input output sigma [options]\n"
                              "  input, output: 32-bit big-endian float files; the input name ends in WxHxD.ext\n"
-                             "  sigma: noise standard deviation on the 0...255 scale\n");
+                             "  sigma: noise standard deviation on the 0...255 scale\n"
+                             "  options: --patch PX PY PZ, --search SX SY SZ, --h-factor F,\n"
+                             "           --normalise, --kernel rational|exponential\n");
         return 1;
     }
     try {
         const denoiser::VolumeSize size = sizeFromName(argv[1]);
-        const denoiser::NlmParams params = denoiser::originalParams(std::stod(argv[3]));
+        denoiser::NlmParams params = denoiser::originalParams(std::stod(argv[3]));
+        applyOptions(argc, argv, params);
         const std::size_t voxels = static_cast<std::size_t>(size.width) * size.height * size.depth;
         const std::vector<float> volume = readBigEndianFloats(argv[1], voxels);
         writeBigEndianFloats(argv[2], denoiser::nlmBruteForce(volume, size, params));

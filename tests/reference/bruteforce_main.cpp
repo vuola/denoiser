@@ -17,9 +17,17 @@
 //   --normalise          patch distance as mean over the patch, not as sum
 //   --kernel K           rational (default) or exponential
 //
+// and options that choose the computation instead of the definition
+// (README chapter 13):
+//   --fast               the fast filter (src/nlm_fast.cpp)
+//   --single             with --fast: distances in single precision (default)
+//   --double             with --fast: distances in double precision
+//   --block N            with --fast: block edge in voxels (default 64)
+//
 // Exit code 0 on success, 1 on failure with the reason on standard error.
 
 #include "nlm_bruteforce.hpp"
+#include "nlm_fast.hpp"
 
 #include <cctype>
 #include <cstddef>
@@ -101,7 +109,8 @@ void writeBigEndianFloats(const std::string& path, const std::vector<float>& val
 
 /// Applies the options that follow the three fixed arguments to `params`.
 /// Throws std::runtime_error for an unknown option or a missing or bad value.
-void applyOptions(int argc, char** argv, denoiser::NlmParams& params) {
+void applyOptions(int argc, char** argv, denoiser::NlmParams& params, bool& fast,
+                  denoiser::NlmFastOptions& fast_options) {
     int i = 4;
     const auto value = [&]() -> std::string {
         if (i + 1 >= argc) {
@@ -129,6 +138,14 @@ void applyOptions(int argc, char** argv, denoiser::NlmParams& params) {
             } else {
                 throw std::runtime_error("--kernel must be rational or exponential");
             }
+        } else if (option == "--fast") {
+            fast = true;
+        } else if (option == "--single") {
+            fast_options.single_precision = true;
+        } else if (option == "--double") {
+            fast_options.single_precision = false;
+        } else if (option == "--block") {
+            fast_options.block_size = std::stoi(value());
         } else {
             throw std::runtime_error("unknown option " + option);
         }
@@ -141,16 +158,20 @@ int main(int argc, char** argv) {
                              "  input, output: 32-bit big-endian float files; the input name ends in WxHxD.ext\n"
                              "  sigma: noise standard deviation on the 0...255 scale\n"
                              "  options: --patch PX PY PZ, --search SX SY SZ, --h-factor F,\n"
-                             "           --normalise, --kernel rational|exponential\n");
+                             "           --normalise, --kernel rational|exponential,\n"
+                             "           --fast, --single, --double, --block N\n");
         return 1;
     }
     try {
         const denoiser::VolumeSize size = sizeFromName(argv[1]);
         denoiser::NlmParams params = denoiser::originalParams(std::stod(argv[3]));
-        applyOptions(argc, argv, params);
+        bool fast = false;
+        denoiser::NlmFastOptions fast_options;
+        applyOptions(argc, argv, params, fast, fast_options);
         const std::size_t voxels = static_cast<std::size_t>(size.width) * size.height * size.depth;
         const std::vector<float> volume = readBigEndianFloats(argv[1], voxels);
-        writeBigEndianFloats(argv[2], denoiser::nlmBruteForce(volume, size, params));
+        writeBigEndianFloats(argv[2], fast ? denoiser::nlmFast(volume, size, params, fast_options)
+                                           : denoiser::nlmBruteForce(volume, size, params));
     } catch (const std::exception& error) {
         std::fprintf(stderr, "Failed: %s\n", error.what());
         return 1;

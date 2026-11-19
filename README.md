@@ -20,6 +20,7 @@ completed.
 | 10 | Step 1.3: pre-processing, and the brightness drift of the present scans | Done, committed |
 | 11 | Step 1.4: noise estimate, and the noise of the present scans | Done, committed |
 | 12 | Step 1.5: filter settings, and which of them suit fibre rods | Done, committed |
+| 13 | Step 1.6: the fast filter and its accuracy | Done, waiting for review |
 
 ---
 
@@ -161,7 +162,7 @@ and the source files credit both.
 | 1.3 | **Pre-processing.** Region-of-interest crop in voxel coordinates, intensity mapping to the working range and back, NaN/Inf handling. The mapping is linear and nothing is clipped by default (requirement R2). A measurement of how brightness drifts from the rod centre to the rim, as a basis for deciding on a correction (R4) | Replaces `PickCube.ijm` and `scaleToRange.py` |
 | 1.4 | **Noise estimate.** Sigma estimated from the data with the method of `estimate_noise.py`, or given by hand | Replaces `estimate_noise.py` |
 | 1.5 | **Filter parameters.** Patch radius and search radius settable separately for x, y and z (R5), `h` settable; the sigma table with its cubes stays as the default. Patch-size normalisation and kernel selectable: original behaviour or as in the IPOL paper | Deviations from the papers become explicit choices |
-| 1.6 | **Numerical accuracy.** Measure the float32 integral-image error; fix it if it matters | Tested accuracy statement |
+| 1.6 | **Fast filter and numerical accuracy.** The filter computed with running sums, for all settings of step 1.5, checked against the brute-force filter in double and single precision (scope extended in the review of step 1.5, section 12.9) | Tested accuracy statement |
 | 1.7 | **Speed and memory.** Symmetric shifts, persistent threads, smaller per-thread storage, block I/O, vectorisable prefix sums | Benchmark table against the baseline |
 | 1.8 | **One-command run and run record.** `denoiser run <scan folder>` chains steps 1.1–1.5 and the filter, and writes a record of every setting next to the output | The pipeline of chapter 2 |
 | 1.9 | Phase 1 report | `latex/phase1.tex`, PDF |
@@ -2420,3 +2421,240 @@ brute-force filter).
 - **Cost estimate.** The original program needed about 10 hours for a
   present scan (section 7.3). With a third of the positions the same code
   would need about 3 hours, before any of the speed work of step 1.7.
+
+## 13. Step 1.6 — The fast filter and its accuracy
+
+Status: **done, waiting for review; not committed.**
+
+The review of step 1.5 extended this step (section 12.9): besides settling
+the accuracy of the summed-distance arithmetic, it writes the fast filter
+with all settings of chapter 12 and checks it against the brute-force
+filter. The fast filter computes the same filter as the brute-force filter,
+but finds every patch distance with running sums instead of summing the
+patch voxel by voxel.
+
+### 13.1 Main results
+
+1. **In double precision the fast filter gives the brute-force result
+   exactly.** On five volumes with three settings each, the largest
+   difference is 0. That meets the acceptance rule of phase 1 (section 1.6)
+   with no tolerance at all.
+2. **In single precision it is off by at most 0.004 on the 0–255 scale**,
+   at most one count after rounding to 16 bits. The original program's
+   32-bit running sums were off by up to 2.7 (section 6.5). The difference
+   is that the running sums here never reach beyond one block plus the
+   patch, so they stay small.
+3. **Single precision is the default (decided in review).** It is 25–35 %
+   faster on the larger volumes and its error is far below the noise.
+   Double precision remains an option and is what the checks against the
+   brute-force filter use (section 13.5).
+4. **The cost no longer grows with the patch.** The original table at
+   sigma 17 (patch 5³) takes about as long as at sigma 10 (patch 3³); the
+   brute-force filter needed three to four times as long.
+5. **It is not yet faster than the original program with all its workers.**
+   With the original settings on the 232³ crop it takes 600 s on the second
+   machine, against an estimated 360 s for the original program (section
+   7.3). With the rod defaults it takes 144 s in double and 106 s in single
+   precision. Per voxel and position it is slow (13.6); that is the task of
+   step 1.7.
+
+### 13.2 What was added
+
+| File | Purpose |
+|---|---|
+| `include/nlm_fast.hpp`, `src/nlm_fast.cpp` | The fast filter `nlmFast` with the options block size and precision |
+| `include/nlm_bruteforce.hpp`, `src/nlm_bruteforce.cpp` | The check of the arguments is now the public function `checkNlmInput`, shared by both filters |
+| `tests/reference/bruteforce_main.cpp` | Options `--fast`, `--single` (default), `--double`, `--block N` |
+| `run/fast_check.py` | The check of this chapter: brute force, fast double and fast single on every volume and setting |
+| `run/fast/linux/check.csv` | Its results: 45 rows |
+| `tests/test_nlm_fast.cpp` | 5 new test cases |
+
+The program version is now 1.6.0. As planned, the command `denoiser` gets
+the filter with `denoiser run` in step 1.8; until then it is reached through
+the brute-force program with `--fast`.
+
+### 13.3 Commands
+
+```
+make bruteforce
+build/denoiser_bruteforce <input> <output> <sigma> --fast
+build/denoiser_bruteforce <input> <output> <sigma> --fast --double --block 32
+python run/fast_check.py
+python run/fast_check.py --volumes Sample2_5mu_c64 --settings rods
+```
+
+The program takes the same input and output files as in chapter 6
+(headerless big-endian floats, size at the end of the file name) and all
+options of chapter 12. `run/fast_check.py` writes one row per volume, setting and computation into
+`run/fast/<machine>/check.csv` as soon as it is ready, and removes the
+filtered volumes afterwards.
+
+### 13.4 How the fast filter works
+
+The patch distance between voxel u and the voxel shifted by d is the sum of
+the squared differences (v(u + q) − v(u + q + d))² over the patch offsets q.
+For one shift d, the squared differences are the same numbers for all
+voxels, only summed over different boxes. So the filter takes one shift at a
+time:
+
+1. Squared differences for all voxels of the block plus the patch margin.
+2. Their sum over the patch box, one axis after the other: a running sum
+   along x, then along y, then along z. Each costs two additions per voxel
+   whatever the patch radius. An axis with patch radius 0 is skipped, so
+   the column patch of the rod defaults needs the z pass only.
+3. Weight of every voxel from its distance, exactly as in `nlmWeight`, and
+   the weighted sums.
+
+The volume is cut into cubic blocks (default 64³). Each block is copied
+with a margin of patch plus search radius, edges replicated as in the
+brute-force filter, and filtered on its own. Blocks are shared out among the
+threads. The shifts run in the order of the brute-force filter, and the
+accumulators are always in double precision.
+
+Why the error is small: a running sum adds and removes squared
+differences, so its rounding error grows with the size of the sums it
+carries. Here a running sum covers at most one block edge plus the patch,
+not the whole block as in the original program's summed-area table. In
+double precision the remaining rounding never changed a result in any of
+the 15 cases; in single precision (24 bits) it shows in the last digits.
+
+Unlike the original program, the result does not depend on the number of
+threads. The block size can change it at the level of rounding, because
+the running sums start anew at each block.
+
+### 13.5 Accuracy
+
+Fast filter against the brute-force filter, all on the second machine.
+"Largest" and "RMS" are differences of the float results on the 0–255
+scale; "counts" is the largest difference after rounding to 16 bits.
+
+| Volume | Setting | Double: largest | Single: largest | Single: RMS | Single: counts |
+|---|---|---|---|---|---|
+| `Sample1_18p15_5mu_c64` | table 10 | 0 | 0.0040 | 3.2·10⁻⁵ | 1 |
+| | table 17 | 0 | 0.0011 | 1.4·10⁻⁵ | 1 |
+| | rods | 0 | 0.0003 | 5.8·10⁻⁶ | 1 |
+| `Sample2_5mu_c64` | table 10 | 0 | 0.0010 | 1.6·10⁻⁵ | 1 |
+| | table 17 | 0 | 0.00005 | 2.9·10⁻⁶ | 1 |
+| | rods | 0 | 0.00006 | 2.7·10⁻⁶ | 1 |
+| `Sample2_5mu_c232` | table 10 | 0 | 0.0017 | 9.3·10⁻⁶ | 1 |
+| | table 17 | 0 | 0.00008 | 1.8·10⁻⁶ | 1 |
+| | rods | 0 | 0.0001 | 2.1·10⁻⁶ | 1 |
+| `phantom_coarse_cn` | table 10 | 0 | 0.0029 | 4.2·10⁻⁵ | 1 |
+| | table 17 | 0 | 0.0007 | 1.5·10⁻⁵ | 1 |
+| | rods | 0 | 0.0002 | 5.4·10⁻⁶ | 1 |
+| `phantom_fine_cn` | table 10 | 0 | 0.0035 | 2.8·10⁻⁵ | 1 |
+| | table 17 | 0 | 0.0010 | 8.2·10⁻⁶ | 1 |
+| | rods | 0 | 0.0003 | 3.2·10⁻⁶ | 1 |
+
+Settings: "table 10" and "table 17" are the original table at sigma 10
+(patch 3³, window 21³) and sigma 17 (patch 5³, window 21³); "rods" are the
+defaults of section 12.7 at sigma 14 (patch 1 × 1 × 17, window 7 × 7 × 61).
+
+One count is 1/257 of a step on the 0–255 scale. The noise of the present
+scans (sigma 14–16 on that scale) is 3 600–4 100 counts, and the filter
+moves a voxel by hundreds to thousands of counts. The classification of
+phase 4 cannot see a difference of one count.
+
+**Decided in review: single precision is the default.** The reasons:
+
+- Its error is far below the noise, as above.
+- The error does not grow with the scan. A running sum spans one block plus
+  the patch, so the bound depends on the block size, not on the volume
+  size; a 2000 × 2000 × 975 scan has the same bound as the 232³ crop.
+- The result is repeatable: same input and settings give the same bits,
+  whatever the number of threads.
+- It is 25–35 % faster on the larger volumes (section 13.6) and halves the
+  buffer memory.
+- The GPU version of phase 5 computes in single precision; using it on the
+  CPU already proves that arithmetic on real scans.
+
+Double precision stays as an option for one purpose: it reproduces the
+brute-force filter to rounding (difference 0 in all 15 cases), so a check
+against the reference can demand a difference of 0, and any difference
+points to a bug. The tests and `run/fast_check.py` use it for that; single
+precision is checked against the same reference with a tolerance of 0.01.
+
+### 13.6 Run time
+
+Second machine, all threads, one run each:
+
+| Volume | Setting | Brute force | Fast double | Fast single |
+|---|---|---|---|---|
+| 64³ test scan | table 10 | 13 s | 12 s | 12 s |
+| | table 17 | 44 s | 15 s | 14 s |
+| | rods | 8 s | 4–5 s | 4–5 s |
+| `phantom_fine_cn` (160 × 160 × 96) | table 10 | 122 s | 107 s | 69 s |
+| | table 17 | 413 s | 114 s | 73 s |
+| | rods | 73 s | 27 s | 18 s |
+| 232³ crop | table 10 | 625 s | 598 s | 402 s |
+| | table 17 | 2 728 s | 623 s | 418 s |
+| | rods | 373 s | 144 s | 106 s |
+
+On the development machine (all threads), 232³ crop: rods 132 s in double,
+116 s in single, 102 s in double with blocks of 32³; table 17 398 s.
+
+What the numbers say:
+
+- **Small volumes use one thread.** A 64³ volume is a single block, so the
+  fast filter runs on one thread there while the brute-force filter uses
+  all of them. Per thread it is 17 to 48 times faster than brute force, but
+  the wall time hardly shows it.
+- **Per voxel and position it is slow.** On the 232³ crop with the original
+  settings it spends about 80 ns per voxel and position per thread on the
+  second machine (about 40 ns on the development machine). The arithmetic is
+  a few operations; the time goes into memory traffic. A block of 64³ with
+  its margin needs well over 10 MB of buffers per thread, all of it touched
+  for every shift (input, squared differences, the sums along each axis,
+  three accumulators in double precision),
+  which is far beyond the processor cache. Smaller blocks were already faster
+  (102 s against 132 s), and single precision, with half the buffer size,
+  is faster by a quarter to a third.
+- **Against the original program.** With all its workers the original
+  program needs about 360 s for the 232³ crop (29 s per million voxels,
+  section 7.3) and 3.9 GB of memory. The fast filter is at 600 s with
+  the same settings, so the original's speed is not reached yet. With the
+  rod defaults, which visit a third of the positions, it is at 106–144 s.
+- **Projection.** With the rod defaults, blocks of 32³ and single
+  precision, the reliable region of a present scan (750 × 750 × 1000) would
+  take about an hour and a quarter on the development machine; the
+  original program needs about 10 hours for a whole scan.
+- **Memory.** Peak 300–400 MB on the 232³ crop, of which the volume in and
+  out takes about 100 MB. The original program needs 3.9 GB for any volume.
+
+### 13.7 Functions
+
+| Function | Purpose |
+|---|---|
+| `nlmFast(volume, size, params, options)` | The filter, for all settings of `NlmParams`; `NlmFastOptions` sets block size (default 64) and precision (default single) |
+| `checkNlmInput(volume, size, params)` | Rejects a size, radius or setting out of range and a vector whose length does not match the size; used by both filters |
+
+### 13.8 Tests and results on both platforms
+
+`make test`: 55 test cases, 2489 checks, all pass on both machines; the
+build with address and undefined-behaviour checks on the second machine
+reports nothing. The new cases:
+
+| Case | What it checks |
+|---|---|
+| Many settings | 13 combinations against brute force, in double (to 10⁻⁴) and single precision (to 0.01), on an 11 × 9 × 13 volume cut into blocks of 4: cube, column, x-only, y-only and one-voxel patches, uneven radii, a patch larger than the block, a window larger than the volume or of one voxel, mean distance, exponential weight and the IPOL variant |
+| Tracked test scan | A 24³ part of `Sample2_5mu_c64` at sigma 17 with the original table, against brute force: double precision to 10⁻⁴, the default (single) to 0.01 |
+| Block size and threads | In double precision, blocks of 5 and one block agree to 10⁻⁴; the same call twice gives identical bits whatever the thread timing |
+| Constant volume and range | A constant volume stays exactly constant; results stay within the input's range |
+| Bad arguments | A size that does not match the vector, h = 0, a negative radius and a block size of 0 are rejected |
+
+The check of section 13.5 ran on the second machine (about two hours, most
+of it the brute-force filter on the 232³ crop).
+
+### 13.9 Open points
+
+- **Speed is for step 1.7**, and this step shows where to start: buffers
+  that fit the cache (smaller blocks, or several shifts per pass over a
+  smaller tile), threads within a block so small volumes use all of them,
+  and single precision for the running sums. The goal set by the baseline
+  is the original program's 29 s per million voxels with the original
+  settings.
+- **Speed gap between the precisions.** Single precision is faster now
+  mainly because its buffers are half the size and memory traffic is the
+  bottleneck. If step 1.7 makes the buffers fit the cache, the gap may
+  shrink; the default stays single either way, since it costs nothing in
+  accuracy that matters.

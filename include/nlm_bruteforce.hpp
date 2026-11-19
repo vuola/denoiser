@@ -78,6 +78,13 @@ double patchVoxels(const NlmParams& params);
 /// @return a weight between 0 and 1; see nlmBruteForce() for the formula
 double nlmWeight(double distance, const NlmParams& params);
 
+/// Checks the arguments of the filters (nlmBruteForce(), nlmFast()).
+/// @throws std::invalid_argument if a dimension is below 1, the vector
+///         length does not match the size, sigma or h is not positive, or a
+///         radius is negative
+void checkNlmInput(const std::vector<float>& volume, const VolumeSize& size,
+                   const NlmParams& params);
+
 /// Filters a volume with Non-Local Means, computed from the definition.
 ///
 /// For every voxel p and every shift d inside the search window (d != 0):

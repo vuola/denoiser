@@ -61,8 +61,8 @@ double nlmWeight(double distance, const NlmParams& params) {
     return params.kernel == NlmKernel::kRational ? h2 / (h2 + excess) : std::exp(-excess / h2);
 }
 
-std::vector<float> nlmBruteForce(const std::vector<float>& volume, const VolumeSize& size,
-                                 const NlmParams& params) {
+void checkNlmInput(const std::vector<float>& volume, const VolumeSize& size,
+                   const NlmParams& params) {
     if (size.width < 1 || size.height < 1 || size.depth < 1) {
         throw std::invalid_argument("volume dimensions must be at least 1");
     }
@@ -78,6 +78,11 @@ std::vector<float> nlmBruteForce(const std::vector<float>& volume, const VolumeS
             throw std::invalid_argument("radii must not be negative");
         }
     }
+}
+
+std::vector<float> nlmBruteForce(const std::vector<float>& volume, const VolumeSize& size,
+                                 const NlmParams& params) {
+    checkNlmInput(volume, size, params);
 
     const int px = params.patch_radius[0], py = params.patch_radius[1], pz = params.patch_radius[2];
     const int sx = params.search_radius[0], sy = params.search_radius[1], sz = params.search_radius[2];
@@ -114,7 +119,7 @@ std::vector<float> nlmBruteForce(const std::vector<float>& volume, const VolumeS
     const std::ptrdiff_t step_y = static_cast<std::ptrdiff_t>(pw);
     const std::ptrdiff_t step_z = static_cast<std::ptrdiff_t>(pw * ph);
 
-    std::vector<float> result(voxels);
+    std::vector<float> result(volume.size());
 
     #pragma omp parallel for schedule(dynamic)
     for (int z = 0; z < size.depth; ++z) {

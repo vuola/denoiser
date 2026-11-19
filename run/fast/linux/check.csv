@@ -1,0 +1,46 @@
+volume,size,setting,computation,float_max_abs,float_rms,counts_max_abs,seconds,peak_mb
+Sample1_18p15_5mu_c64,64x64x64,table 10,brute force,,,,13.2441,25.582
+Sample1_18p15_5mu_c64,64x64x64,table 10,fast double,0,0,0,11.8908,25.9336
+Sample1_18p15_5mu_c64,64x64x64,table 10,fast single,0.0039978,3.24369e-05,1,11.4912,26.457
+Sample1_18p15_5mu_c64,64x64x64,table 17,brute force,,,,44.3604,26.457
+Sample1_18p15_5mu_c64,64x64x64,table 17,fast double,0,0,0,14.7588,26.457
+Sample1_18p15_5mu_c64,64x64x64,table 17,fast single,0.00112915,1.44403e-05,1,15.0675,26.457
+Sample1_18p15_5mu_c64,64x64x64,rods,brute force,,,,7.85331,26.457
+Sample1_18p15_5mu_c64,64x64x64,rods,fast double,0,0,0,4.17385,26.457
+Sample1_18p15_5mu_c64,64x64x64,rods,fast single,0.000320435,5.81518e-06,1,4.2042,26.457
+Sample2_5mu_c64,64x64x64,table 10,brute force,,,,13.1257,26.457
+Sample2_5mu_c64,64x64x64,table 10,fast double,0,0,0,12.3848,26.457
+Sample2_5mu_c64,64x64x64,table 10,fast single,0.000961304,1.56749e-05,1,12.7612,26.457
+Sample2_5mu_c64,64x64x64,table 17,brute force,,,,43.8445,26.457
+Sample2_5mu_c64,64x64x64,table 17,fast double,0,0,0,14.4545,26.457
+Sample2_5mu_c64,64x64x64,table 17,fast single,5.34058e-05,2.85282e-06,1,13.3991,26.457
+Sample2_5mu_c64,64x64x64,rods,brute force,,,,8.02061,26.457
+Sample2_5mu_c64,64x64x64,rods,fast double,0,0,0,5.38322,26.457
+Sample2_5mu_c64,64x64x64,rods,fast single,6.10352e-05,2.68126e-06,1,5.3046,26.457
+Sample2_5mu_c232,232x232x232,table 10,brute force,,,,624.924,173.859
+Sample2_5mu_c232,232x232x232,table 10,fast double,0,0,0,598.315,378.418
+Sample2_5mu_c232,232x232x232,table 10,fast single,0.00165558,9.34887e-06,1,401.983,304.562
+Sample2_5mu_c232,232x232x232,table 17,brute force,,,,2728.09,236.887
+Sample2_5mu_c232,232x232x232,table 17,fast double,0,0,0,622.597,379.402
+Sample2_5mu_c232,232x232x232,table 17,fast single,8.39233e-05,1.7828e-06,1,418.381,310.859
+Sample2_5mu_c232,232x232x232,rods,brute force,,,,372.778,237.105
+Sample2_5mu_c232,232x232x232,rods,fast double,0,0,0,144.402,401.43
+Sample2_5mu_c232,232x232x232,rods,fast single,0.000106812,2.13705e-06,1,105.664,316.707
+phantom_coarse_cn,64x64x64,table 10,brute force,,,,13.0197,237.316
+phantom_coarse_cn,64x64x64,table 10,fast double,0,0,0,12.5984,237.316
+phantom_coarse_cn,64x64x64,table 10,fast single,0.00292969,4.1527e-05,1,11.3602,237.316
+phantom_coarse_cn,64x64x64,table 17,brute force,,,,44.1231,237.316
+phantom_coarse_cn,64x64x64,table 17,fast double,0,0,0,12.8663,237.316
+phantom_coarse_cn,64x64x64,table 17,fast single,0.000732422,1.48863e-05,1,12.8533,237.316
+phantom_coarse_cn,64x64x64,rods,brute force,,,,7.77729,237.316
+phantom_coarse_cn,64x64x64,rods,fast double,0,0,0,4.47015,237.316
+phantom_coarse_cn,64x64x64,rods,fast single,0.000244141,5.36624e-06,1,4.35128,237.316
+phantom_fine_cn,160x160x96,table 10,brute force,,,,122.227,237.316
+phantom_fine_cn,160x160x96,table 10,fast double,0,0,0,106.665,237.316
+phantom_fine_cn,160x160x96,table 10,fast single,0.00346375,2.7832e-05,1,69.358,237.316
+phantom_fine_cn,160x160x96,table 17,brute force,,,,412.701,237.316
+phantom_fine_cn,160x160x96,table 17,fast double,0,0,0,114.492,237.316
+phantom_fine_cn,160x160x96,table 17,fast single,0.00100708,8.20922e-06,1,73.4962,237.316
+phantom_fine_cn,160x160x96,rods,brute force,,,,72.8971,237.316
+phantom_fine_cn,160x160x96,rods,fast double,0,0,0,26.6056,237.316
+phantom_fine_cn,160x160x96,rods,fast single,0.00025177,3.19656e-06,1,18.148,237.316

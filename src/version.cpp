@@ -6,7 +6,7 @@
 namespace denoiser {
 
 std::string version() {
-    return "1.5.0";
+    return "1.6.0";
 }
 
 }  // namespace denoiser

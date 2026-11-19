@@ -20,7 +20,7 @@ completed.
 | 10 | Step 1.3: pre-processing, and the brightness drift of the present scans | Done, committed |
 | 11 | Step 1.4: noise estimate, and the noise of the present scans | Done, committed |
 | 12 | Step 1.5: filter settings, and which of them suit fibre rods | Done, committed |
-| 13 | Step 1.6: the fast filter and its accuracy | Done, waiting for review |
+| 13 | Step 1.6: the fast filter and its accuracy | Done, committed |
 
 ---
 
@@ -2424,7 +2424,7 @@ brute-force filter).
 
 ## 13. Step 1.6 — The fast filter and its accuracy
 
-Status: **done, waiting for review; not committed.**
+Status: **done, committed.**
 
 The review of step 1.5 extended this step (section 12.9): besides settling
 the accuracy of the summed-distance arithmetic, it writes the fast filter
